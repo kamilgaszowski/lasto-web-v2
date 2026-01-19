@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import './lasto.css';
 
-
 import { 
   RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, 
   CheckIcon, CloseIcon, TrashIcon, InfoIcon, IconCopy, MergeIcon
@@ -72,12 +71,12 @@ const dbGetAll = async (): Promise<HistoryItem[]> => {
   });
 };
 
-const dbDelete = async (id: string) => {
+const dbDelete = async (item: HistoryItem) => {
   const db = await openDB();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    store.delete(id);
+    store.delete(item.id);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -121,7 +120,7 @@ export default function LastoWeb() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<HistoryItem | null>(null);
   const [infoModal, setInfoModal] = useState<{ isOpen: boolean; title: string; message: string }>({ isOpen: false, title: '', message: '' });
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
@@ -129,11 +128,15 @@ export default function LastoWeb() {
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [mergeSource, setMergeSource] = useState(''); 
   const [mergeTarget, setMergeTarget] = useState(''); 
-const textareaRef = useRef<HTMLTextAreaElement>(null);
-const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
+  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
   const [newSpeakerName, setNewSpeakerName] = useState('');
+  
+  // Stan menu kontekstowego i Drag & Drop
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; cursorIndex: number } | null>(null);
-const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
+
   // Stany chwilowych zmian przycisków
   const [copyState, setCopyState] = useState(false);
   const [saveState, setSaveState] = useState(false);
@@ -143,7 +146,7 @@ const dragRef = useRef<{ startX: number; startY: number; initialX: number; initi
   const deleteModalRef = useRef<HTMLDivElement>(null);
   const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
   const deleteAllModalRef = useRef<HTMLDivElement>(null);
-
+  const [speakerToDelete, setSpeakerToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
@@ -173,20 +176,16 @@ const dragRef = useRef<{ startX: number; startY: number; initialX: number; initi
     if (isDeleteAllModalOpen) deleteAllModalRef.current?.focus();
   }, [isDeleteModalOpen, isDeleteAllModalOpen]);
 
-  // --- FUNKCJE LOGICZNE ---
- // --- FUNKCJE LOGICZNE (Zaktualizowane) ---
+  // --- FUNKCJE LOGICZNE (ROZMÓWCY) ---
   
-  // Pobieramy listę wszystkich kluczy głośników (z transkrypcji + te dodane ręcznie)
   const getAllSpeakers = () => {
     if (!selectedItem) return [];
     const fromTranscript = selectedItem.utterances?.map(u => u.speaker) || [];
     const fromNames = Object.keys(selectedItem.speakerNames || {});
-    // Używamy Set, żeby usunąć duplikaty i sortujemy alfabetycznie
     return Array.from(new Set([...fromTranscript, ...fromNames])).sort();
   };
 
   const getSpeakerName = (item: HistoryItem, speakerKey: string): string => {
-    // Jeśli mamy nazwę w mapie, zwracamy ją. Jeśli nie, zwracamy pusty string (placeholder załatwi sprawę)
     if (item.speakerNames && item.speakerNames[speakerKey]) return item.speakerNames[speakerKey];
     return "";
   };
@@ -203,28 +202,25 @@ const dragRef = useRef<{ startX: number; startY: number; initialX: number; initi
   };
 
   const handleAddSpeaker = () => {
-    // Prosty prompt (można to zrobić ładniej, ale to najszybsza metoda)
     const newKey = prompt("Podaj identyfikator nowego rozmówcy (np. C, D, Moderator):");
     if (newKey && selectedItem) {
-        // Dodajemy pusty wpis, żeby pojawił się na liście
         handleSpeakerNameChange(newKey.toUpperCase(), "Nowa Osoba");
     }
   };
 
-const handleDeleteSpeaker = async (speakerKey: string) => {
-    if (!selectedItem) return;
+  // 1. Kliknięcie "X" przy rozmówcy - Otwiera modal
+  const handleDeleteSpeakerClick = (speakerKey: string) => {
+    setSpeakerToDelete(speakerKey);
+  };
 
-    // Pytamy o potwierdzenie, bo to usunie fragmenty tekstu
-    if (!window.confirm(`Czy na pewno chcesz usunąć rozmówcę ${speakerKey}? Usunie to również wszystkie przypisane do niego wypowiedzi z tekstu.`)) {
-      return;
-    }
+  // 2. Potwierdzenie w modalu - Wykonuje usuwanie rozmówcy
+  const confirmSpeakerDeletion = async () => {
+    if (!selectedItem || !speakerToDelete) return;
 
-    // 1. Usuwamy przypisanie imienia (jeśli było)
+    const speakerKey = speakerToDelete;
     const newNames = { ...selectedItem.speakerNames };
     delete newNames[speakerKey]; 
     
-    // 2. KLUCZOWE: Usuwamy wypowiedzi tego rozmówcy z transkrypcji
-    // Dzięki temu 'getAllSpeakers' przestanie go wykrywać
     const newUtterances = selectedItem.utterances?.filter(u => u.speaker !== speakerKey) || [];
 
     const updatedItem = { 
@@ -233,26 +229,22 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         utterances: newUtterances
     };
 
-
-
     setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
     setSelectedItem(updatedItem);
     await dbSave(updatedItem);
+    setSpeakerToDelete(null);
   };
 
   const executeMergeSpeakers = async () => {
     if (!selectedItem || !mergeSource || !mergeTarget || mergeSource === mergeTarget) return;
 
-    // 1. Aktualizujemy transkrypcję: Wszędzie gdzie mówi Source, wstawiamy Target
     const newUtterances = selectedItem.utterances?.map(u => ({
         ...u,
         speaker: u.speaker === mergeSource ? mergeTarget : u.speaker
     })) || [];
 
-    // 2. Aktualizujemy nazwy: Usuwamy wpis dla Source (bo już nie istnieje)
     const newNames = { ...selectedItem.speakerNames };
     delete newNames[mergeSource]; 
-    // (Opcjonalnie: upewniamy się, że Target ma nazwę)
 
     const updatedItem = {
         ...selectedItem,
@@ -271,8 +263,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
 
   const confirmAddSpeaker = async () => {
     if (!selectedItem) return;
-
-    // 1. Znajdź pierwszą wolną literę (klucz)
     const currentKeys = getAllSpeakers();
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let newKey = "";
@@ -283,23 +273,16 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         break;
       }
     }
-    // Jeśli alfabet się skończył (mało prawdopodobne), daj losowy ID
     if (!newKey) newKey = `S${currentKeys.length + 1}`;
 
-    // 2. Przypisz wpisaną nazwę do tego klucza
-    // Jeśli użytkownik nic nie wpisał, użyj samego klucza jako nazwy
     const nameToSave = newSpeakerName.trim() || newKey;
-    
     await handleSpeakerNameChange(newKey, nameToSave);
     
-    // 3. Posprzątaj
     setNewSpeakerName('');
     setIsAddSpeakerModalOpen(false);
   };
-  
 
-
-// --- 1. FUNKCJE EDYCJI TEKSTU ---
+  // --- FUNKCJE EDYCJI TEKSTU ---
 
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
@@ -307,7 +290,7 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     const updatedItem = {
       ...selectedItem,
       content: newText,
-      utterances: [] // Przechodzimy w tryb ręczny (czyścimy klocki AI)
+      utterances: [] // Przechodzimy w tryb ręczny
     };
 
     setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
@@ -335,7 +318,7 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     }, 0);
   };
 
-  // --- 2. OBSŁUGA MENU KONTEKSTOWEGO (Prawy Przycisk) ---
+  // --- MENU KONTEKSTOWE (Prawy Przycisk) & DRAG DROP ---
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault(); 
@@ -361,19 +344,15 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     setContextMenu(null);
   };
 
-  // --- 3. PRZESUWANIE OKIENKA (Drag & Drop) ---
-
   const startDrag = (e: React.MouseEvent) => {
     if (!contextMenu) return;
     e.preventDefault();
-    
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
       initialX: contextMenu.x,
       initialY: contextMenu.y
     };
-    
     window.addEventListener('mousemove', handleDragMove);
     window.addEventListener('mouseup', stopDrag);
   };
@@ -382,7 +361,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     if (!dragRef.current) return;
     const dx = e.clientX - dragRef.current.startX;
     const dy = e.clientY - dragRef.current.startY;
-    
     setContextMenu(prev => prev ? {
       ...prev,
       x: dragRef.current!.initialX + dx,
@@ -396,27 +374,22 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     window.removeEventListener('mouseup', stopDrag);
   };
 
-
-
-
-
-
-
-  // Zamykanie menu po kliknięciu gdziekolwiek indziej
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
   }, []);
 
+  // --- ZARZĄDZANIE PLIKAMI (USUWANIE / TYTUŁY) ---
+
   const executeDelete = async () => {
     if (!itemToDelete) return;
     setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
-        const updatedHistory = history.filter(item => item.id !== itemToDelete);
+        const updatedHistory = history.filter(item => item.id !== itemToDelete.id);
         setHistory(updatedHistory);
-        if (selectedItem?.id === itemToDelete) setSelectedItem(null);
+        if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
         setIsDeleteModalOpen(false);
         setItemToDelete(null);
 
@@ -433,6 +406,19 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         }
     } catch (e) { console.error(e); } 
     finally { setIsProcessing(false); }
+  };
+
+  // Funkcja usuwania wywoływana z modala
+  const confirmDelete = async () => {
+    if (!itemToDelete) return;
+    const newHistory = history.filter(i => i.id !== itemToDelete.id);
+    setHistory(newHistory);
+    
+    if (selectedItem?.id === itemToDelete.id) {
+      setSelectedItem(null);
+    }
+    setIsDeleteModalOpen(false);
+    setItemToDelete(null);
   };
 
   const executeDeleteAll = async () => {
@@ -671,14 +657,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     setTimeout(() => setCopyState(false), 2000);
   };
 
-
-
-
-
-
-
-
-
   return (
     <main className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans transition-colors duration-300">
       
@@ -717,25 +695,31 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
 
         <div className="archive-list">
           {history.map((item) => (
-            <button 
+            <div 
               key={item.id} 
               onClick={() => { 
                 setSelectedItem(item);
                 if (window.innerWidth < 768) setIsSidebarOpen(false);
               }} 
-              className={`archive-item ${selectedItem?.id === item.id ? 'archive-item-active' : ''}`}
+              className={`archive-item cursor-pointer ${selectedItem?.id === item.id ? 'archive-item-active' : ''}`}
             >
-              <div 
-                onClick={(e) => { e.stopPropagation(); confirmDelete(item.id); }} 
+              <button 
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  setItemToDelete(item);
+                  setIsDeleteModalOpen(true);
+                }} 
                 className="archive-delete-btn"
+                title="Usuń nagranie"
               >
                 <CloseIcon />
-              </div>
-              <div className="archive-item-title">{item.title}</div>
+              </button>
+              
+              <div className="archive-item-title">{item.title || "Bez tytułu"}</div>
               <div className="archive-item-date">
                 {new Date(item.date).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </div>
-            </button>
+            </div>
           ))}
         </div>
 
@@ -750,7 +734,7 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
       </div>
     </div>
 
-    {/* SEKCJA GŁÓWNY PANEL START ---*/}
+    {/* SEKCJA GŁÓWNY PANEL START */}
     <div className={`lasto-main-panel ${isSidebarOpen ? 'md:ml-80 ml-0' : 'ml-0'}`}>
       
       {/* PASEK GÓRNY */}
@@ -829,7 +813,7 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                 </div>
               ) : (
                 <div className="title-view-mode">
-                  <button onClick={() => confirmDelete(selectedItem.id)} className="mr-4 text-gray-400 hover:text-red-500 transition-colors p-2" title="Usuń nagranie">
+                  <button onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} className="mr-4 text-gray-400 hover:text-red-500 transition-colors p-2" title="Usuń nagranie">
                     <TrashIcon />
                   </button>
                   <div className="title-clickable" onClick={() => { setEditedTitle(selectedItem.title); setIsEditingTitle(true); }}>
@@ -852,19 +836,14 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
               )}
             </div>
 
-        {/* ZMIANA: Dynamiczna lista rozmówców */}
-            
             <div className="speaker-list">
               {getAllSpeakers().map((speakerKey) => {
-                // Logika: Jeśli jest nazwa, pokaż nazwę. Jeśli nie, pokaż klucz (np. "A")
                 const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined 
                   ? selectedItem.speakerNames[speakerKey] 
                   : speakerKey;
 
                 return (
                   <div key={speakerKey} className="speaker-badge">
-                    {/* INPUT: Zmienia nazwę */}
-                    {/* PRZYCISK + : Wstawia do tekstu */}
                     <button 
                       onClick={() => insertSpeakerAtCursor(speakerKey)}
                       className="speaker-action-btn btn-insert"
@@ -879,11 +858,8 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                       placeholder="Nazwa..." 
                     />
                     
-                    
-
-                    {/* PRZYCISK X : Usuwa */}
                     <button 
-                      onClick={() => handleDeleteSpeaker(speakerKey)}
+                      onClick={() => handleDeleteSpeakerClick(speakerKey)} 
                       className="speaker-action-btn btn-delete"
                       title="Usuń rozmówcę"
                     >
@@ -897,24 +873,22 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                 Nowy
               </button>
               
-              {/* PRZYCISK SCALANIA */}
               {getAllSpeakers().length > 1 && (
                  <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">
                    Scal rozmówców
                  </button>
               )}
             </div>
-         {/* ZMIANA: Kontener relative dla textarea i pływającego przycisku */}
+            
             <div className="relative flex-1 w-full min-h-0">
               <textarea 
-              ref={textareaRef}
-                className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900 pr-16" // Dodano pr-16 żeby tekst nie wchodził pod guzik
+                ref={textareaRef}
+                className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900 pr-16"
                 value={getDisplayText(selectedItem)} 
                 onChange={(e) => handleTextChange(e.target.value)} 
                 onContextMenu={handleContextMenu} 
               />
               
-              {/* Pływający przycisk kopiowania (jak w code blocks) */}
               <button 
                 onClick={copyToClipboard} 
                 className={`absolute top-4 right-4 p-2 rounded-lg transition-all backdrop-blur-sm border border-transparent ${
@@ -942,9 +916,9 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         </div>
       </div>
     </div>
-    { /*- SEKCJA GŁÓWNY PANEL END ---*/}
+    {/* - SEKCJA GŁÓWNY PANEL END ---*/}
 
-{/* MODAL USTAWIEŃ Z ZAKŁADKAMI MOBILE */}
+    {/* MODAL USTAWIEŃ Z ZAKŁADKAMI MOBILE */}
     {isSettingsOpen && (
       <div className="modal-backdrop" onClick={() => setIsSettingsOpen(false)}>
         <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
@@ -953,7 +927,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
             <CloseIcon />
           </button>
 
-          {/* PASEK ZAKŁADEK (TYLKO MOBILE) */}
           <div className="flex md:hidden w-full border-b border-gray-800 bg-gray-900/50 shrink-0">
             <button 
               onClick={() => setSettingsTab('form')} 
@@ -969,8 +942,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
             </button>
           </div>
 
-          {/* LEWA KOLUMNA (PRZEWODNIK) */}
-          {/* Klasa `hidden md:block` ukrywa go na mobile, chyba że wybrana jest zakładka guide */}
           <div className={`guide-panel ${settingsTab === 'guide' ? 'block' : 'hidden md:block'}`}>
             <h3 className="guide-heading">Przewodnik konfiguracji</h3>
             <div className="space-y-12">
@@ -1004,12 +975,9 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
             </div>
           </div>
 
-          {/* PRAWA KOLUMNA (FORMULARZ) */}
-          {/* Klasa `hidden md:block` ukrywa go na mobile, chyba że wybrana jest zakładka form */}
           <div className={`form-panel ${settingsTab === 'form' ? 'block' : 'hidden md:block'}`}>
             <h3 className="settings-heading">Ustawienia</h3>
             <div className="space-y-12">
-              
               <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); setIsSettingsOpen(false); }}>
                 <div className="space-y-6">
                   <div className="input-group">
@@ -1048,13 +1016,13 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                   </label>
                 </div>
               </div>
-
               <button onClick={() => setIsSettingsOpen(false)} className="btn-submit">Gotowe</button>
             </div>
           </div>
         </div>
       </div>
     )}
+
     {/* MODAL USUWANIA JEDNEGO */}
     {isDeleteModalOpen && (
       <div 
@@ -1083,29 +1051,21 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
       </div>
     )}
 
-    {/* MODAL USUWANIA WSZYSTKIEGO */}
-    {isDeleteAllModalOpen && (
-      <div 
-        ref={deleteAllModalRef} 
-        className="modal-backdrop-high" 
-        onClick={() => setIsDeleteAllModalOpen(false)} 
-        onKeyDown={(e) => { 
-          if (e.key === 'Enter') executeDeleteAll(); 
-          if (e.key === 'Escape') setIsDeleteAllModalOpen(false); 
-        }} 
-        tabIndex={-1}
-      >
-        <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+    {/* MODAL POTWIERDZENIA USUWANIA Z ARCHIWUM (DLA KONKRETNEGO ITEMU) */}
+    {isDeleteModalOpen && itemToDelete && (
+      <div className="modal-backdrop-high" onClick={() => setIsDeleteModalOpen(false)}>
+        <div className="modal-box text-center" onClick={(e) => e.stopPropagation()}>
           <div className="modal-icon-wrapper icon-theme-danger">
             <TrashIcon />
           </div>
-          <div className="space-y-2">
-            <h3 className="modal-title-bold">Usunąć wszystko?</h3>
-            <p className="modal-desc">Stracisz bezpowrotnie wszystkie nagrania lokalne i w chmurze Pantry.</p>
-          </div>
-          <div className="modal-actions-col">
-            <button onClick={executeDeleteAll} className="btn-modal-delete-all">Tak, usuń wszystko (Enter)</button>
-            <button onClick={() => setIsDeleteAllModalOpen(false)} className="btn-modal-cancel-text">Anuluj (Esc)</button>
+          <h3 className="modal-title-bold mb-2">Usunąć nagranie?</h3>
+          <p className="modal-desc mb-6">
+            Czy na pewno chcesz usunąć plik <strong className="text-white">{itemToDelete.title || "Bez tytułu"}</strong>?
+            <br />Tej operacji nie można cofnąć.
+          </p>
+          <div className="modal-actions-row">
+            <button onClick={() => setIsDeleteModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
+            <button onClick={confirmDelete} className="btn-modal-delete">Usuń</button>
           </div>
         </div>
       </div>
@@ -1134,7 +1094,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
       <div className="modal-backdrop" onClick={() => setIsMergeModalOpen(false)}>
         <div className="modal-box text-left" onClick={(e) => e.stopPropagation()}>
           <h3 className="modal-title-bold mb-6 text-center">Scalanie rozmówców</h3>
-          
           <div className="space-y-4">
             <div>
               <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Kogo scalić? (Zniknie)</label>
@@ -1146,17 +1105,14 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                 <option value="">Wybierz...</option>
                 {getAllSpeakers().map(s => {
                     if (s === mergeTarget) return null;
-                    // ZMIANA: Wyświetlamy tylko imię, a jak go brak to literę (s)
                     const label = getSpeakerName(selectedItem!, s) || s;
                     return <option key={s} value={s}>{label}</option>;
                 })}
               </select>
             </div>
-
             <div className="flex justify-center text-gray-500">
                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" /></svg>
             </div>
-
             <div>
               <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Z kim? (Pozostanie)</label>
               <select 
@@ -1167,14 +1123,12 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
                 <option value="">Wybierz...</option>
                 {getAllSpeakers().map(s => {
                     if (s === mergeSource) return null;
-                    // ZMIANA: To samo tutaj
                     const label = getSpeakerName(selectedItem!, s) || s;
                     return <option key={s} value={s}>{label}</option>;
                 })}
               </select>
             </div>
           </div>
-
           <div className="modal-actions-row mt-8">
             <button onClick={() => setIsMergeModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
             <button 
@@ -1188,12 +1142,12 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         </div>
       </div>
     )}
+
     {/* MODAL DODAWANIA ROZMÓWCY */}
     {isAddSpeakerModalOpen && (
       <div className="modal-backdrop" onClick={() => setIsAddSpeakerModalOpen(false)}>
         <div className="modal-box text-left" onClick={(e) => e.stopPropagation()}>
           <h3 className="modal-title-bold mb-4 text-center">Nowy Rozmówca</h3>
-          
           <div className="space-y-4">
             <div>
               <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Nazwa (Imię)</label>
@@ -1207,7 +1161,6 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
               />
             </div>
           </div>
-
           <div className="modal-actions-row mt-6">
             <button onClick={() => setIsAddSpeakerModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
             <button onClick={confirmAddSpeaker} className="btn-modal-ok">Dodaj</button>
@@ -1215,7 +1168,8 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         </div>
       </div>
     )}
-{/* MENU KONTEKSTOWE (Floating Window) */}
+
+    {/* MENU KONTEKSTOWE (Floating Window) */}
     {contextMenu && contextMenu.visible && (
       <div 
         className="context-menu" 
@@ -1255,6 +1209,31 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
         </div>
       </div>
     )}
+
+    {/* MODAL POTWIERDZENIA USUNIĘCIA ROZMÓWCY */}
+    {speakerToDelete && (
+      <div className="modal-backdrop-high" onClick={() => setSpeakerToDelete(null)}>
+        <div className="modal-box text-center" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-icon-wrapper icon-theme-danger">
+            <TrashIcon />
+          </div>
+          <h3 className="modal-title-bold mb-2">Usunąć rozmówcę?</h3>
+          <p className="modal-desc mb-6">
+            Czy na pewno chcesz usunąć rozmówcę <strong className="text-white">{getSpeakerName(selectedItem!, speakerToDelete) || speakerToDelete}</strong>?<br/>
+            <span className="text-red-400 mt-2 block font-medium">To usunie wszystkie jego wypowiedzi z transkrypcji.</span>
+          </p>
+          <div className="modal-actions-row">
+            <button onClick={() => setSpeakerToDelete(null)} className="btn-modal-cancel">
+              Anuluj
+            </button>
+            <button onClick={confirmSpeakerDeletion} className="btn-modal-delete">
+              Usuń
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     </main>
   );
 }
