@@ -139,89 +139,124 @@
 
 /* --- MODALS (Settings, Delete, Info) --- */
 .modal-backdrop {
-  @apply fixed inset-0 z-50 flex items-center justify-center p-6 outline-none;
-  @apply bg-black/40 backdrop-blur-md;
+  @apply fixed inset-0 z-50 flex items-center justify-center p-0 md:p-6 outline-none; /* ZMIANA: p-0 na mobile */
+  @apply bg-black/60 backdrop-blur-md;
   animation: lasto-fade-in 0.2s ease-out;
 }
+
+/* Modal Ustawień - RWD */
+.settings-modal {
+  /* BAZA (MOBILE): Flex pionowy, pełna wysokość, brak zaokrągleń */
+  @apply flex flex-col w-full h-[100dvh] md:h-auto md:max-h-[90vh] max-w-5xl relative overflow-hidden;
+  @apply bg-[#111827] text-white shadow-2xl;
+  
+  /* DESKTOP (md): Flex poziomy, zaokrąglenia, border */
+  @apply md:flex-row md:rounded-[2.5rem] md:border md:border-gray-800;
+  
+  animation: lasto-scale-in 0.3s ease-out;
+}
+
+/* Przycisk zamknij */
+.settings-close-btn {
+  @apply absolute top-4 right-4 md:top-6 md:right-8 z-20;
+  @apply p-2 rounded-full bg-gray-800/50 md:bg-transparent; /* Tło pod iksem na mobile dla czytelności */
+  @apply text-gray-400 hover:text-white transition-colors;
+}
+
+/* Lewy panel (Przewodnik) */
+.guide-panel {
+  /* MOBILE: Pełna wysokość (bo będzie jedynym widocznym elementem w zakładce) */
+  @apply w-full md:w-1/2 p-6 md:p-12;
+  @apply bg-gray-900/30;
+  @apply border-b md:border-b-0 md:border-r border-gray-800;
+  @apply overflow-y-auto;
+
+}
+
+/* Na desktopie zdejmujemy limit wysokości z guide panel */
+@media (min-width: 768px) {
+  .guide-panel { max-height: none; }
+}
+
+.guide-heading { @apply text-2xl md:text-3xl font-light tracking-tight mb-6 md:mb-10 text-white; }
+
+/* Kroki w poradniku */
+.step-container { @apply space-y-3; }
+.step-header { @apply flex items-center space-x-3 text-indigo-400; }
+.step-number { @apply flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-full border-2 border-current text-xs md:text-sm font-bold; }
+.step-title { @apply font-bold uppercase tracking-widest text-[10px] md:text-xs; }
+.step-content { @apply pl-9 md:pl-12 space-y-2 text-sm md:text-base text-gray-400 leading-relaxed; }
+.step-link { @apply underline text-indigo-400 hover:text-indigo-300; }
+.highlight-text { @apply text-white font-medium; }
+
+/* Prawy panel (Formularz) */
+.form-panel {
+
+  @apply w-full md:w-1/2 p-6 md:p-12 space-y-8 md:space-y-12;
+  @apply overflow-y-auto;
+}
+.settings-heading { @apply text-2xl md:text-3xl font-thin text-center text-white; }
+.settings-label { @apply text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] px-1 block mb-2; }
+
+/* Inputy */
+.input-group { @apply space-y-2; }
+.input-label { @apply text-[10px] md:text-[11px] font-semibold text-gray-500 uppercase ml-1; }
+.settings-input { 
+  @apply w-full bg-gray-900/50 text-white border border-gray-700;
+  @apply rounded-xl md:rounded-2xl p-3 md:p-4 text-sm md:text-base;
+  @apply focus:ring-1 focus:ring-white focus:border-white transition-all outline-none; 
+}
+
+/* Sekcja Backup */
+.backup-section { @apply space-y-6 pt-4 border-t border-gray-800; }
+.backup-grid { @apply grid grid-cols-2 gap-3 md:gap-4; }
+.btn-backup { 
+  @apply px-3 py-3 md:px-4 md:py-4 rounded-xl md:rounded-2xl;
+  @apply bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white;
+  @apply transition-all text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-center cursor-pointer; 
+}
+
+.btn-submit { 
+  @apply w-full bg-white text-black py-4 md:py-5 rounded-xl md:rounded-[1.5rem];
+  @apply font-bold text-sm shadow-xl active:scale-[0.98] transition-transform; 
+}
+
+/* --- POZOSTAŁE MODALE (Bez zmian logicznych, tylko kolor) --- */
 .modal-backdrop-high {
   @apply fixed inset-0 z-[60] flex items-center justify-center p-6 outline-none;
-  @apply bg-black/40 backdrop-blur-md;
+  @apply bg-black/60 backdrop-blur-md;
   animation: lasto-fade-in 0.2s ease-out;
 }
 .modal-backdrop-light {
   @apply fixed inset-0 z-50 flex items-center justify-center p-6 outline-none;
-  @apply bg-white/60 dark:bg-black/80 backdrop-blur-xl;
+  @apply bg-white/10 backdrop-blur-md; /* ZMIANA: Ciemniejszy backdrop dla info */
   animation: lasto-fade-in 0.2s ease-out;
 }
 
 .modal-box {
-  @apply border border-gray-100 dark:border-gray-800;
-  @apply p-8 rounded-[2rem] shadow-2xl w-full max-w-sm text-center;
+  @apply border border-gray-800;
+  @apply p-6 md:p-8 rounded-[1.5rem] md:rounded-[2rem] shadow-2xl w-full max-w-sm text-center;
+  @apply bg-[#111827] text-white;
   animation: lasto-scale-in 0.2s ease-out;
- background-color: #111827;
-}
-.dark .modal-box {
-  background-color: #111827; 
-  border-color: #1f2937;
 }
 
-.settings-modal {
-  @apply w-full max-w-5xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden relative;
-  @apply border border-gray-100 dark:border-gray-800 rounded-[2.5rem] shadow-2xl;
-  animation: lasto-scale-in 0.3s ease-out;
-  background-color: #111827;
-}
-.dark .settings-modal { background-color: #111827; }
+.modal-icon-wrapper { @apply mx-auto w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center mb-4; }
+.icon-theme-red { @apply bg-red-900/30 text-red-500; }
+.icon-theme-danger { @apply bg-red-600 text-white animate-pulse; }
+.icon-theme-neutral { @apply bg-gray-800 text-white; }
 
-.settings-close-btn { @apply absolute top-6 right-8 z-10 text-gray-400 hover:text-black dark:hover:text-white transition-colors; }
-
-/* Lewy panel ustawień */
-.guide-panel { @apply w-full md:w-1/2 p-12 overflow-y-auto border-r border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30; }
-.guide-heading { @apply text-3xl font-light tracking-tight mb-10 dark:text-white; }
-.step-container { @apply space-y-4; }
-.step-header { @apply flex items-center space-x-4 text-indigo-600 dark:text-indigo-400; }
-.step-number { @apply flex items-center justify-center w-8 h-8 rounded-full border-2 border-current text-sm font-bold; }
-.step-title { @apply font-bold uppercase tracking-widest text-xs; }
-.step-content { @apply pl-12 space-y-4 text-base text-gray-600 dark:text-gray-400 leading-relaxed; }
-.step-link { @apply underline text-indigo-600 hover:text-indigo-800; }
-.highlight-text { @apply text-black dark:text-white font-medium; }
-
-/* Prawy panel ustawień */
-.form-panel { @apply w-full md:w-1/2 p-12 overflow-y-auto space-y-12; }
-.settings-heading { @apply text-3xl font-thin text-center dark:text-white; }
-.settings-label { @apply text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] px-1 block mb-2; }
-.theme-switcher { @apply flex bg-gray-100 dark:bg-gray-800 p-1.5 rounded-2xl; }
-.theme-btn { @apply flex-1 flex items-center justify-center space-x-2 py-4 rounded-xl text-xs font-medium transition-all text-gray-400 hover:text-gray-600 dark:hover:text-gray-200; }
-.theme-btn-active { @apply !bg-white !shadow-sm !text-black dark:!bg-gray-700 dark:!text-white; }
-
-.input-group { @apply space-y-2; }
-.input-label { @apply text-[11px] font-semibold text-gray-500 uppercase ml-1; }
-.settings-input { @apply w-full bg-gray-50 dark:bg-gray-800 dark:text-white border border-gray-100 dark:border-gray-700 rounded-2xl p-4 text-sm focus:ring-1 focus:ring-black transition-all outline-none; }
-
-.backup-section { @apply space-y-6 pt-4 border-t border-gray-100 dark:border-gray-800; }
-.backup-grid { @apply grid grid-cols-2 gap-4; }
-.btn-backup { @apply px-4 py-4 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white transition-all text-[10px] font-bold uppercase tracking-wider text-center cursor-pointer; }
-.btn-submit { @apply w-full bg-black dark:bg-white text-white dark:text-black py-5 rounded-[1.5rem] font-bold text-sm shadow-xl active:scale-[0.98] transition-transform; }
-
-/* Wspólne elementy modali */
-.modal-icon-wrapper { @apply mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4; }
-.icon-theme-red { @apply bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-500; }
-.icon-theme-danger { @apply bg-red-500 text-white animate-pulse; }
-.icon-theme-neutral { @apply bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white; }
-
-.modal-title-sm { @apply text-xl font-medium dark:text-white; }
-.modal-title-bold { @apply text-xl font-bold dark:text-white; }
-.modal-desc { @apply text-sm text-gray-500 dark:text-gray-400; }
+.modal-title-sm { @apply text-lg md:text-xl font-medium text-white; }
+.modal-title-bold { @apply text-lg md:text-xl font-bold text-white; }
+.modal-desc { @apply text-sm text-gray-400; }
 
 .modal-actions-row { @apply flex space-x-3 pt-2; }
 .modal-actions-col { @apply flex flex-col space-y-2 pt-4; }
 
-.btn-modal-cancel { @apply flex-1 px-4 py-3 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 transition-colors text-sm font-medium; }
+.btn-modal-cancel { @apply flex-1 px-4 py-3 rounded-xl bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-sm font-medium; }
 .btn-modal-delete { @apply flex-1 px-4 py-3 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors text-sm font-medium shadow-lg shadow-red-600/20; }
 .btn-modal-delete-all { @apply w-full py-4 rounded-xl bg-red-600 text-white font-bold shadow-lg shadow-red-600/20 hover:bg-red-700 transition-colors text-sm; }
-.btn-modal-cancel-text { @apply w-full py-3 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 text-xs font-medium; }
-.btn-modal-ok { @apply w-full px-4 py-3 rounded-xl bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 transition-colors text-sm font-medium; }
-
+.btn-modal-cancel-text { @apply w-full py-3 rounded-xl bg-transparent text-gray-500 hover:text-gray-300 text-xs font-medium; }
+.btn-modal-ok { @apply w-full px-4 py-3 rounded-xl bg-white text-black hover:bg-gray-200 transition-colors text-sm font-medium; }
 /* --- ANIMACJE (Native) --- */
 @keyframes lasto-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lasto-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }

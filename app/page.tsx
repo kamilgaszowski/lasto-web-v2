@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import './lasto.css';
 
-// Usunięto importy ikon słońca/księżyca, bo wymuszamy tryb ciemny
+
 import { 
   RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, 
-  CheckIcon, CloseIcon, TrashIcon, InfoIcon
+  CheckIcon, CloseIcon, TrashIcon, InfoIcon, IconCopy
 } from './components/Icons';
 
 // --- MODELE DANYCH ---
@@ -125,8 +125,9 @@ export default function LastoWeb() {
   const [infoModal, setInfoModal] = useState<{ isOpen: boolean; title: string; message: string }>({ isOpen: false, title: '', message: '' });
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
+  const [settingsTab, setSettingsTab] = useState<'guide' | 'form'>('form');
   
-  // USUNIĘTO: const [theme, setTheme]... - wymuszamy tryb ciemny globalnie
+
 
   // Stany chwilowych zmian przycisków
   const [copyState, setCopyState] = useState(false);
@@ -629,24 +630,33 @@ export default function LastoWeb() {
               <input className="speaker-field" value={getSpeakerName(selectedItem, 'B')} onChange={(e) => handleSpeakerNameChange('B', e.target.value)} placeholder="Osoba B" />
             </div>
 
-            <textarea className="transcript-editor" value={getDisplayText(selectedItem)} readOnly />
-
-            <div className="flex items-center justify-end pt-2 relative">
-              <button onClick={copyToClipboard} className={`btn-copy ${copyState ? 'btn-status-success' : ''}`}>
-                {!copyState && <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" /></svg>}
-                <span>{copyState ? 'Skopiowano' : 'Kopiuj tekst'}</span>
+         {/* ZMIANA: Kontener relative dla textarea i pływającego przycisku */}
+            <div className="relative flex-1 w-full min-h-0">
+              <textarea 
+                className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900 pr-16" // Dodano pr-16 żeby tekst nie wchodził pod guzik
+                value={getDisplayText(selectedItem)} 
+                readOnly 
+              />
+              
+              {/* Pływający przycisk kopiowania (jak w code blocks) */}
+              <button 
+                onClick={copyToClipboard} 
+                className={`absolute top-4 right-4 p-2 rounded-lg transition-all backdrop-blur-sm border border-transparent ${
+                  copyState 
+                    ? 'bg-green-500/10 text-green-500 border-green-500/20' 
+                    : 'bg-gray-200/50 dark:bg-gray-800/50 text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-700 hover:text-black dark:hover:text-white'
+                }`}
+                title="Kopiuj tekst"
+              >
+                {copyState ? <CheckIcon /> : <IconCopy />}
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* STOPKA PODPISU */}
+     {/* STOPKA PODPISU */}
       <div className="main-footer">
-        <div className="auto-save-indicator">
-          <div className="status-dot"></div>
-          <span>Auto-save on (DB)</span>
-        </div>
         <div className="footer-signature">
           <span className="italic">Lasto beth nîn</span>
           <span className="rune-divider">ᛟ</span>
@@ -658,7 +668,7 @@ export default function LastoWeb() {
     </div>
     { /*- SEKCJA GŁÓWNY PANEL END ---*/}
 
-    {/* MODAL USTAWIEŃ - TERAZ CZYSTY I POPRAWNY */}
+{/* MODAL USTAWIEŃ Z ZAKŁADKAMI MOBILE */}
     {isSettingsOpen && (
       <div className="modal-backdrop" onClick={() => setIsSettingsOpen(false)}>
         <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
@@ -667,8 +677,25 @@ export default function LastoWeb() {
             <CloseIcon />
           </button>
 
-          {/* LEWA KOLUMNA */}
-          <div className="guide-panel">
+          {/* PASEK ZAKŁADEK (TYLKO MOBILE) */}
+          <div className="flex md:hidden w-full border-b border-gray-800 bg-gray-900/50 shrink-0">
+            <button 
+              onClick={() => setSettingsTab('form')} 
+              className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-colors ${settingsTab === 'form' ? 'text-white bg-gray-800 border-b-2 border-white' : 'text-gray-500'}`}
+            >
+              Ustawienia
+            </button>
+            <button 
+              onClick={() => setSettingsTab('guide')} 
+              className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-colors ${settingsTab === 'guide' ? 'text-white bg-gray-800 border-b-2 border-white' : 'text-gray-500'}`}
+            >
+              Konfiguracja
+            </button>
+          </div>
+
+          {/* LEWA KOLUMNA (PRZEWODNIK) */}
+          {/* Klasa `hidden md:block` ukrywa go na mobile, chyba że wybrana jest zakładka guide */}
+          <div className={`guide-panel ${settingsTab === 'guide' ? 'block' : 'hidden md:block'}`}>
             <h3 className="guide-heading">Przewodnik konfiguracji</h3>
             <div className="space-y-12">
               <div className="step-container">
@@ -701,8 +728,9 @@ export default function LastoWeb() {
             </div>
           </div>
 
-          {/* PRAWA KOLUMNA */}
-          <div className="form-panel">
+          {/* PRAWA KOLUMNA (FORMULARZ) */}
+          {/* Klasa `hidden md:block` ukrywa go na mobile, chyba że wybrana jest zakładka form */}
+          <div className={`form-panel ${settingsTab === 'form' ? 'block' : 'hidden md:block'}`}>
             <h3 className="settings-heading">Ustawienia</h3>
             <div className="space-y-12">
               
@@ -751,7 +779,6 @@ export default function LastoWeb() {
         </div>
       </div>
     )}
-
     {/* MODAL USUWANIA JEDNEGO */}
     {isDeleteModalOpen && (
       <div 
