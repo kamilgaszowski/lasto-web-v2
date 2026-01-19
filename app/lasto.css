@@ -1,0 +1,230 @@
+@import "tailwindcss";
+
+/* --- GŁÓWNA KONFIGURACJA KOLORÓW --- */
+:root {
+  --color-black: #000;
+  --color-white: #fff;
+}
+
+/* --- TŁO GŁÓWNE (Main Panel) --- */
+.lasto-main-panel {
+  @apply flex-1 flex flex-col relative min-w-0 transition-all duration-300;
+  background-color: white; 
+}
+
+
+.lasto-main-panel {
+  @apply flex-1 flex flex-col relative min-w-0 transition-all duration-300;
+
+  background-color: #030712; 
+}
+
+/* --- SIDEBAR --- */
+.lasto-sidebar {
+  @apply fixed inset-y-0 left-0 z-30 flex flex-col transition-all duration-300;
+  @apply bg-gray-50/95 dark:bg-gray-900/95 border-r border-gray-100 dark:border-gray-800;
+}
+
+.sidebar-open { @apply translate-x-0 w-full md:w-80; }
+.sidebar-closed { @apply -translate-x-full w-full md:w-80; }
+
+.sidebar-content { @apply flex flex-col h-full overflow-hidden; }
+.sidebar-header { @apply p-8 pb-4 flex justify-between items-center whitespace-nowrap; }
+
+/* Lista nagrań */
+.archive-list { @apply flex-1 flex flex-col overflow-y-auto px-4 space-y-1; }
+.archive-item { 
+  @apply w-full text-left p-4 rounded-xl transition-all relative;
+  @apply hover:bg-gray-100 dark:hover:bg-gray-800/50;
+}
+.archive-item-active { 
+  @apply bg-white dark:bg-gray-800 shadow-sm ring-1 ring-black/5 dark:ring-white/10; 
+}
+
+/* Przyciski w sidebarze */
+.sidebar-actions-grid { @apply px-6 pb-6 flex space-x-2 relative; }
+.btn-action-base { 
+  @apply flex-1 py-2 px-3 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-all flex items-center justify-center space-x-2; 
+}
+.btn-pobierz { @apply bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100; }
+.btn-wyslij { @apply bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200; }
+
+/* Przycisk usuwania w liście */
+.archive-delete-btn {
+  @apply absolute top-2 right-2 p-2 z-10 transition-all text-gray-400 hover:text-red-500;
+  opacity: 0;
+}
+.archive-item:hover .archive-delete-btn { opacity: 1; }
+
+.sidebar-footer { @apply p-6 border-t border-gray-100 dark:border-gray-800 mt-auto bg-gray-50/50 dark:bg-gray-900/50; }
+
+/* --- TOP BAR --- */
+.top-bar {
+  @apply w-full flex justify-between items-start z-10;
+  @apply p-4 md:p-8;
+}
+.top-bar-left { @apply flex items-center space-x-6; }
+.icon-button { @apply text-gray-300 hover:text-black dark:hover:text-white transition-colors cursor-pointer; }
+.settings-trigger { @apply text-gray-300 hover:text-black dark:hover:text-white transition-all duration-300; }
+.settings-trigger:hover { transform: rotate(12deg); }
+.btn-logo { @apply relative z-40 font-thin tracking-tighter transition-all duration-300 text-2xl md:text-3xl text-gray-400 hover:text-black dark:hover:text-white; }
+
+/* --- WORKSPACE & HERO --- */
+.workspace-area { @apply flex-1 flex flex-col items-center justify-center px-4 md:px-12 pb-8 md:pb-12 overflow-hidden; }
+
+.hero-container {
+  @apply text-center space-y-12;
+  animation: lasto-fade-in-zoom 0.7s ease-out;
+}
+.hero-title {
+  @apply text-6xl md:text-9xl font-thin tracking-tighter transition-colors;
+  color: #111827;
+}
+.dark .hero-title { color: white; }
+
+.hero-subtitle { @apply flex items-center justify-center space-x-6 text-xl font-light text-gray-400; }
+.rune-divider { @apply text-2xl text-gray-200 dark:text-gray-700 pb-1; }
+
+.import-zone { @apply flex flex-col space-y-4 items-center pt-8 min-h-[120px]; }
+.btn-primary { @apply bg-black dark:bg-white dark:text-black text-white px-10 py-5 rounded-full transition-all shadow-xl font-medium hover:scale-105; }
+.btn-import { 
+  @apply relative cursor-pointer px-12 py-5 rounded-full transition-all shadow-xl flex flex-col items-center justify-center border-2;
+  @apply bg-black dark:bg-white dark:text-black text-white border-transparent hover:scale-105 active:scale-95; 
+}
+.import-dragging { @apply bg-gray-800 text-white scale-110 border-white border-dashed; }
+.format-hint { @apply text-[10px] uppercase tracking-widest text-gray-300 dark:text-gray-600 mt-4; }
+
+/* --- EDITOR --- */
+.editor-container {
+  @apply w-full max-w-5xl h-full flex flex-col space-y-6;
+  animation: lasto-slide-up 0.5s ease-out;
+}
+.editor-header { @apply flex items-end justify-between border-b border-gray-50 dark:border-gray-800 pb-6 min-h-[80px]; }
+
+.title-view-mode { @apply flex items-center w-full relative; }
+.title-text { 
+  @apply text-4xl font-thin tracking-tight truncate max-w-2xl;
+  color: black;
+}
+.dark .title-text { color: white; }
+
+.title-clickable { @apply flex items-center w-full cursor-pointer; }
+.edit-indicator { @apply ml-4 opacity-30 text-gray-400 transition-all duration-300; }
+.title-view-mode:hover .edit-indicator { opacity: 1; }
+
+.title-input { @apply w-full text-4xl font-thin tracking-tight bg-gray-50 dark:bg-gray-900 p-2 rounded outline-none dark:text-white focus:ring-1 focus:ring-black dark:focus:ring-white; }
+.speaker-names-grid { @apply flex space-x-4; }
+.speaker-field { @apply flex-1 bg-gray-100 dark:bg-gray-900 dark:text-white border-none rounded-lg p-3 text-xs focus:ring-1 focus:ring-black dark:focus:ring-white; }
+.transcript-editor { @apply flex-1 w-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900; }
+
+.btn-save-cloud { @apply px-5 py-3 rounded-xl text-[10px] uppercase tracking-widest font-bold flex items-center space-x-2 transition-all bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100; }
+.btn-copy { @apply px-5 py-3 rounded-xl border transition-all text-[10px] uppercase tracking-widest font-medium flex items-center space-x-2 border-gray-200 dark:border-gray-800 text-gray-400 hover:text-black dark:hover:text-white hover:bg-gray-50; }
+.btn-status-success { @apply !bg-black dark:!bg-white !text-white dark:!text-black !border-transparent; }
+
+.loader-spin-xs {
+  @apply w-3 h-3 border-2 border-current border-t-transparent rounded-full;
+  animation: spin 0.8s linear infinite;
+}
+.loader-spin {
+  @apply w-6 h-6 border-2 border-t-black dark:border-t-white rounded-full;
+  animation: spin 1s linear infinite;
+}
+.loader-text { @apply text-[10px] uppercase tracking-widest text-gray-400; }
+
+/* --- FOOTER --- */
+.main-footer { @apply absolute bottom-6 right-8 flex items-center space-x-4 pointer-events-none select-none z-0; }
+.auto-save-indicator { @apply flex items-center space-x-1.5 opacity-40; }
+.status-dot { @apply w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse; }
+.footer-signature { @apply text-[10px] text-gray-200 dark:text-gray-800 uppercase tracking-widest flex items-center space-x-3; }
+
+/* --- MODALS (Settings, Delete, Info) --- */
+.modal-backdrop {
+  @apply fixed inset-0 z-50 flex items-center justify-center p-6 outline-none;
+  @apply bg-black/40 backdrop-blur-md;
+  animation: lasto-fade-in 0.2s ease-out;
+}
+.modal-backdrop-high {
+  @apply fixed inset-0 z-[60] flex items-center justify-center p-6 outline-none;
+  @apply bg-black/40 backdrop-blur-md;
+  animation: lasto-fade-in 0.2s ease-out;
+}
+.modal-backdrop-light {
+  @apply fixed inset-0 z-50 flex items-center justify-center p-6 outline-none;
+  @apply bg-white/60 dark:bg-black/80 backdrop-blur-xl;
+  animation: lasto-fade-in 0.2s ease-out;
+}
+
+.modal-box {
+  @apply border border-gray-100 dark:border-gray-800;
+  @apply p-8 rounded-[2rem] shadow-2xl w-full max-w-sm text-center;
+  animation: lasto-scale-in 0.2s ease-out;
+ background-color: #111827;
+}
+.dark .modal-box {
+  background-color: #111827; 
+  border-color: #1f2937;
+}
+
+.settings-modal {
+  @apply w-full max-w-5xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden relative;
+  @apply border border-gray-100 dark:border-gray-800 rounded-[2.5rem] shadow-2xl;
+  animation: lasto-scale-in 0.3s ease-out;
+  background-color: #111827;
+}
+.dark .settings-modal { background-color: #111827; }
+
+.settings-close-btn { @apply absolute top-6 right-8 z-10 text-gray-400 hover:text-black dark:hover:text-white transition-colors; }
+
+/* Lewy panel ustawień */
+.guide-panel { @apply w-full md:w-1/2 p-12 overflow-y-auto border-r border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30; }
+.guide-heading { @apply text-3xl font-light tracking-tight mb-10 dark:text-white; }
+.step-container { @apply space-y-4; }
+.step-header { @apply flex items-center space-x-4 text-indigo-600 dark:text-indigo-400; }
+.step-number { @apply flex items-center justify-center w-8 h-8 rounded-full border-2 border-current text-sm font-bold; }
+.step-title { @apply font-bold uppercase tracking-widest text-xs; }
+.step-content { @apply pl-12 space-y-4 text-base text-gray-600 dark:text-gray-400 leading-relaxed; }
+.step-link { @apply underline text-indigo-600 hover:text-indigo-800; }
+.highlight-text { @apply text-black dark:text-white font-medium; }
+
+/* Prawy panel ustawień */
+.form-panel { @apply w-full md:w-1/2 p-12 overflow-y-auto space-y-12; }
+.settings-heading { @apply text-3xl font-thin text-center dark:text-white; }
+.settings-label { @apply text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] px-1 block mb-2; }
+.theme-switcher { @apply flex bg-gray-100 dark:bg-gray-800 p-1.5 rounded-2xl; }
+.theme-btn { @apply flex-1 flex items-center justify-center space-x-2 py-4 rounded-xl text-xs font-medium transition-all text-gray-400 hover:text-gray-600 dark:hover:text-gray-200; }
+.theme-btn-active { @apply !bg-white !shadow-sm !text-black dark:!bg-gray-700 dark:!text-white; }
+
+.input-group { @apply space-y-2; }
+.input-label { @apply text-[11px] font-semibold text-gray-500 uppercase ml-1; }
+.settings-input { @apply w-full bg-gray-50 dark:bg-gray-800 dark:text-white border border-gray-100 dark:border-gray-700 rounded-2xl p-4 text-sm focus:ring-1 focus:ring-black transition-all outline-none; }
+
+.backup-section { @apply space-y-6 pt-4 border-t border-gray-100 dark:border-gray-800; }
+.backup-grid { @apply grid grid-cols-2 gap-4; }
+.btn-backup { @apply px-4 py-4 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white transition-all text-[10px] font-bold uppercase tracking-wider text-center cursor-pointer; }
+.btn-submit { @apply w-full bg-black dark:bg-white text-white dark:text-black py-5 rounded-[1.5rem] font-bold text-sm shadow-xl active:scale-[0.98] transition-transform; }
+
+/* Wspólne elementy modali */
+.modal-icon-wrapper { @apply mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4; }
+.icon-theme-red { @apply bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-500; }
+.icon-theme-danger { @apply bg-red-500 text-white animate-pulse; }
+.icon-theme-neutral { @apply bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white; }
+
+.modal-title-sm { @apply text-xl font-medium dark:text-white; }
+.modal-title-bold { @apply text-xl font-bold dark:text-white; }
+.modal-desc { @apply text-sm text-gray-500 dark:text-gray-400; }
+
+.modal-actions-row { @apply flex space-x-3 pt-2; }
+.modal-actions-col { @apply flex flex-col space-y-2 pt-4; }
+
+.btn-modal-cancel { @apply flex-1 px-4 py-3 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 transition-colors text-sm font-medium; }
+.btn-modal-delete { @apply flex-1 px-4 py-3 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors text-sm font-medium shadow-lg shadow-red-600/20; }
+.btn-modal-delete-all { @apply w-full py-4 rounded-xl bg-red-600 text-white font-bold shadow-lg shadow-red-600/20 hover:bg-red-700 transition-colors text-sm; }
+.btn-modal-cancel-text { @apply w-full py-3 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-500 text-xs font-medium; }
+.btn-modal-ok { @apply w-full px-4 py-3 rounded-xl bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 transition-colors text-sm font-medium; }
+
+/* --- ANIMACJE (Native) --- */
+@keyframes lasto-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lasto-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes lasto-fade-in-zoom { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes lasto-slide-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
