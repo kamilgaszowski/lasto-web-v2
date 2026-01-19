@@ -6,7 +6,7 @@ import './lasto.css';
 
 import { 
   RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, 
-  CheckIcon, CloseIcon, TrashIcon, InfoIcon, IconCopy
+  CheckIcon, CloseIcon, TrashIcon, InfoIcon, IconCopy, MergeIcon
 } from './components/Icons';
 
 // --- MODELE DANYCH ---
@@ -126,8 +126,12 @@ export default function LastoWeb() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
   const [settingsTab, setSettingsTab] = useState<'guide' | 'form'>('form');
-  
-
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeSource, setMergeSource] = useState(''); 
+  const [mergeTarget, setMergeTarget] = useState(''); 
+const textareaRef = useRef<HTMLTextAreaElement>(null);
+const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
+  const [newSpeakerName, setNewSpeakerName] = useState('');
 
   // Stany chwilowych zmian przycisków
   const [copyState, setCopyState] = useState(false);
@@ -168,10 +172,21 @@ export default function LastoWeb() {
   }, [isDeleteModalOpen, isDeleteAllModalOpen]);
 
   // --- FUNKCJE LOGICZNE ---
+ // --- FUNKCJE LOGICZNE (Zaktualizowane) ---
+  
+  // Pobieramy listę wszystkich kluczy głośników (z transkrypcji + te dodane ręcznie)
+  const getAllSpeakers = () => {
+    if (!selectedItem) return [];
+    const fromTranscript = selectedItem.utterances?.map(u => u.speaker) || [];
+    const fromNames = Object.keys(selectedItem.speakerNames || {});
+    // Używamy Set, żeby usunąć duplikaty i sortujemy alfabetycznie
+    return Array.from(new Set([...fromTranscript, ...fromNames])).sort();
+  };
+
   const getSpeakerName = (item: HistoryItem, speakerKey: string): string => {
-    const defaults: {[key: string]: string} = { "A": "Rozmówca A", "B": "Rozmówca B" };
-    if (item.speakerNames && item.speakerNames[speakerKey] !== undefined) return item.speakerNames[speakerKey];
-    return defaults[speakerKey] || `Rozmówca ${speakerKey}`;
+    // Jeśli mamy nazwę w mapie, zwracamy ją. Jeśli nie, zwracamy pusty string (placeholder załatwi sprawę)
+    if (item.speakerNames && item.speakerNames[speakerKey]) return item.speakerNames[speakerKey];
+    return "";
   };
 
   const handleSpeakerNameChange = async (speakerKey: string, newName: string) => {
@@ -185,9 +200,148 @@ export default function LastoWeb() {
     await dbSave(updatedItem);
   };
 
-  const confirmDelete = (id: string) => {
-    setItemToDelete(id);
-    setIsDeleteModalOpen(true);
+  const handleAddSpeaker = () => {
+    // Prosty prompt (można to zrobić ładniej, ale to najszybsza metoda)
+    const newKey = prompt("Podaj identyfikator nowego rozmówcy (np. C, D, Moderator):");
+    if (newKey && selectedItem) {
+        // Dodajemy pusty wpis, żeby pojawił się na liście
+        handleSpeakerNameChange(newKey.toUpperCase(), "Nowa Osoba");
+    }
+  };
+
+const handleDeleteSpeaker = async (speakerKey: string) => {
+    if (!selectedItem) return;
+
+    // Pytamy o potwierdzenie, bo to usunie fragmenty tekstu
+    if (!window.confirm(`Czy na pewno chcesz usunąć rozmówcę ${speakerKey}? Usunie to również wszystkie przypisane do niego wypowiedzi z tekstu.`)) {
+      return;
+    }
+
+    // 1. Usuwamy przypisanie imienia (jeśli było)
+    const newNames = { ...selectedItem.speakerNames };
+    delete newNames[speakerKey]; 
+    
+    // 2. KLUCZOWE: Usuwamy wypowiedzi tego rozmówcy z transkrypcji
+    // Dzięki temu 'getAllSpeakers' przestanie go wykrywać
+    const newUtterances = selectedItem.utterances?.filter(u => u.speaker !== speakerKey) || [];
+
+    const updatedItem = { 
+        ...selectedItem, 
+        speakerNames: newNames,
+        utterances: newUtterances
+    };
+
+
+
+    setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
+    setSelectedItem(updatedItem);
+    await dbSave(updatedItem);
+  };
+
+  const executeMergeSpeakers = async () => {
+    if (!selectedItem || !mergeSource || !mergeTarget || mergeSource === mergeTarget) return;
+
+    // 1. Aktualizujemy transkrypcję: Wszędzie gdzie mówi Source, wstawiamy Target
+    const newUtterances = selectedItem.utterances?.map(u => ({
+        ...u,
+        speaker: u.speaker === mergeSource ? mergeTarget : u.speaker
+    })) || [];
+
+    // 2. Aktualizujemy nazwy: Usuwamy wpis dla Source (bo już nie istnieje)
+    const newNames = { ...selectedItem.speakerNames };
+    delete newNames[mergeSource]; 
+    // (Opcjonalnie: upewniamy się, że Target ma nazwę)
+
+    const updatedItem = {
+        ...selectedItem,
+        speakerNames: newNames,
+        utterances: newUtterances
+    };
+
+    setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
+    setSelectedItem(updatedItem);
+    await dbSave(updatedItem);
+    
+    setIsMergeModalOpen(false);
+    setMergeSource('');
+    setMergeTarget('');
+  };
+
+  const confirmAddSpeaker = async () => {
+    if (!selectedItem) return;
+
+    // 1. Znajdź pierwszą wolną literę (klucz)
+    const currentKeys = getAllSpeakers();
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let newKey = "";
+    
+    for (let char of alphabet) {
+      if (!currentKeys.includes(char)) {
+        newKey = char;
+        break;
+      }
+    }
+    // Jeśli alfabet się skończył (mało prawdopodobne), daj losowy ID
+    if (!newKey) newKey = `S${currentKeys.length + 1}`;
+
+    // 2. Przypisz wpisaną nazwę do tego klucza
+    // Jeśli użytkownik nic nie wpisał, użyj samego klucza jako nazwy
+    const nameToSave = newSpeakerName.trim() || newKey;
+    
+    await handleSpeakerNameChange(newKey, nameToSave);
+    
+    // 3. Posprzątaj
+    setNewSpeakerName('');
+    setIsAddSpeakerModalOpen(false);
+  };
+  // --- FUNKCJE EDYCJI TEKSTU ---
+
+  // Funkcja, która obsługuje ręczne wpisywanie tekstu
+  const handleTextChange = async (newText: string) => {
+    if (!selectedItem) return;
+
+    // WAŻNE: Jeśli użytkownik edytuje tekst ręcznie, musimy wyczyścić 'utterances' (klocki AI),
+    // w przeciwnym razie funkcja getDisplayText ciągle nadpisywałaby zmiany użytkownika starą wersją z AI.
+    // Przechodzimy w "Tryb Ręczny".
+    const updatedItem = {
+      ...selectedItem,
+      content: newText,
+      utterances: [] // Czyścimy klocki AI, polegamy teraz na 'content'
+    };
+
+    // Aktualizujemy stan lokalny (szybko)
+    setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
+    setSelectedItem(updatedItem);
+    
+    // Zapisujemy do bazy (można dodać debounce dla wydajności, ale na razie save bezpośredni)
+    await dbSave(updatedItem);
+  };
+
+  // Funkcja wstawiająca tag rozmówcy w miejscu kursora
+  const insertSpeakerAtCursor = (speakerKey: string) => {
+    if (!textareaRef.current || !selectedItem) return;
+
+    const textarea = textareaRef.current;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    
+    // Pobieramy aktualny tekst
+    const currentText = getDisplayText(selectedItem);
+    
+    // Tworzymy wstawkę, np. "\nROZMÓWCA A:\n"
+    const insertText = `\n${getSpeakerName(selectedItem, speakerKey).toUpperCase() || speakerKey}:\n`;
+    
+    // Sklejamy tekst: Przed kursorem + Wstawka + Po kursorze
+    const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
+
+    // Aktualizujemy tekst
+    handleTextChange(newText);
+
+    // Przywracamy focus na textarea i ustawiamy kursor po wstawce (opcjonalne, ale wygodne)
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + insertText.length, start + insertText.length);
+    }, 0);
   };
 
   const executeDelete = async () => {
@@ -625,17 +779,65 @@ export default function LastoWeb() {
               )}
             </div>
 
-            <div className="speaker-names-grid">
-              <input className="speaker-field" value={getSpeakerName(selectedItem, 'A')} onChange={(e) => handleSpeakerNameChange('A', e.target.value)} placeholder="Osoba A" />
-              <input className="speaker-field" value={getSpeakerName(selectedItem, 'B')} onChange={(e) => handleSpeakerNameChange('B', e.target.value)} placeholder="Osoba B" />
-            </div>
+        {/* ZMIANA: Dynamiczna lista rozmówców */}
+            
+            <div className="speaker-list">
+              {getAllSpeakers().map((speakerKey) => {
+                // Logika: Jeśli jest nazwa, pokaż nazwę. Jeśli nie, pokaż klucz (np. "A")
+                const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined 
+                  ? selectedItem.speakerNames[speakerKey] 
+                  : speakerKey;
 
+                return (
+                  <div key={speakerKey} className="speaker-badge">
+                    {/* INPUT: Zmienia nazwę */}
+                    {/* PRZYCISK + : Wstawia do tekstu */}
+                    <button 
+                      onClick={() => insertSpeakerAtCursor(speakerKey)}
+                      className="speaker-action-btn btn-insert"
+                      title="Wstaw do tekstu"
+                    >
+                      +
+                    </button>
+                    <input 
+                      className="speaker-input" 
+                      value={displayValue} 
+                      onChange={(e) => handleSpeakerNameChange(speakerKey, e.target.value)} 
+                      placeholder="Nazwa..." 
+                    />
+                    
+                    
+
+                    {/* PRZYCISK X : Usuwa */}
+                    <button 
+                      onClick={() => handleDeleteSpeaker(speakerKey)}
+                      className="speaker-action-btn btn-delete"
+                      title="Usuń rozmówcę"
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                );
+              })}
+              
+             <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">
+                Nowy
+              </button>
+              
+              {/* PRZYCISK SCALANIA */}
+              {getAllSpeakers().length > 1 && (
+                 <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">
+                   Scal rozmówców
+                 </button>
+              )}
+            </div>
          {/* ZMIANA: Kontener relative dla textarea i pływającego przycisku */}
             <div className="relative flex-1 w-full min-h-0">
               <textarea 
+              ref={textareaRef}
                 className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900 pr-16" // Dodano pr-16 żeby tekst nie wchodził pod guzik
                 value={getDisplayText(selectedItem)} 
-                readOnly 
+                onChange={(e) => handleTextChange(e.target.value)} // Obsługa pisania 
               />
               
               {/* Pływający przycisk kopiowania (jak w code blocks) */}
@@ -848,6 +1050,93 @@ export default function LastoWeb() {
           </div>
           <div className="pt-2">
             <button onClick={() => setInfoModal({ ...infoModal, isOpen: false })} className="btn-modal-ok">OK</button>
+          </div>
+        </div>
+      </div>
+    )}
+  
+   {/* MODAL SCALANIA ROZMÓWCÓW */}
+    {isMergeModalOpen && (
+      <div className="modal-backdrop" onClick={() => setIsMergeModalOpen(false)}>
+        <div className="modal-box text-left" onClick={(e) => e.stopPropagation()}>
+          <h3 className="modal-title-bold mb-6 text-center">Scalanie rozmówców</h3>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Kogo scalić? (Zniknie)</label>
+              <select 
+                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-xl focus:ring-1 focus:ring-white outline-none"
+                value={mergeSource}
+                onChange={(e) => setMergeSource(e.target.value)}
+              >
+                <option value="">Wybierz...</option>
+                {getAllSpeakers().map(s => {
+                    if (s === mergeTarget) return null;
+                    // ZMIANA: Wyświetlamy tylko imię, a jak go brak to literę (s)
+                    const label = getSpeakerName(selectedItem!, s) || s;
+                    return <option key={s} value={s}>{label}</option>;
+                })}
+              </select>
+            </div>
+
+            <div className="flex justify-center text-gray-500">
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" /></svg>
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Z kim? (Pozostanie)</label>
+              <select 
+                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-xl focus:ring-1 focus:ring-white outline-none"
+                value={mergeTarget}
+                onChange={(e) => setMergeTarget(e.target.value)}
+              >
+                <option value="">Wybierz...</option>
+                {getAllSpeakers().map(s => {
+                    if (s === mergeSource) return null;
+                    // ZMIANA: To samo tutaj
+                    const label = getSpeakerName(selectedItem!, s) || s;
+                    return <option key={s} value={s}>{label}</option>;
+                })}
+              </select>
+            </div>
+          </div>
+
+          <div className="modal-actions-row mt-8">
+            <button onClick={() => setIsMergeModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
+            <button 
+                onClick={executeMergeSpeakers} 
+                disabled={!mergeSource || !mergeTarget}
+                className="btn-modal-ok disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Scal
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {/* MODAL DODAWANIA ROZMÓWCY */}
+    {isAddSpeakerModalOpen && (
+      <div className="modal-backdrop" onClick={() => setIsAddSpeakerModalOpen(false)}>
+        <div className="modal-box text-left" onClick={(e) => e.stopPropagation()}>
+          <h3 className="modal-title-bold mb-4 text-center">Nowy Rozmówca</h3>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-gray-500 uppercase font-bold block mb-2">Nazwa (Imię)</label>
+              <input 
+                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-xl focus:ring-1 focus:ring-white outline-none placeholder-gray-600"
+                placeholder="np. Marek, Lektor, Gość..."
+                value={newSpeakerName}
+                onChange={(e) => setNewSpeakerName(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && confirmAddSpeaker()}
+              />
+            </div>
+          </div>
+
+          <div className="modal-actions-row mt-6">
+            <button onClick={() => setIsAddSpeakerModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
+            <button onClick={confirmAddSpeaker} className="btn-modal-ok">Dodaj</button>
           </div>
         </div>
       </div>
