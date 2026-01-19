@@ -132,7 +132,8 @@ export default function LastoWeb() {
 const textareaRef = useRef<HTMLTextAreaElement>(null);
 const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
   const [newSpeakerName, setNewSpeakerName] = useState('');
-
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; cursorIndex: number } | null>(null);
+const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   // Stany chwilowych zmian przycisków
   const [copyState, setCopyState] = useState(false);
   const [saveState, setSaveState] = useState(false);
@@ -142,6 +143,7 @@ const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
   const deleteModalRef = useRef<HTMLDivElement>(null);
   const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
   const deleteAllModalRef = useRef<HTMLDivElement>(null);
+
 
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
@@ -294,30 +296,25 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     setNewSpeakerName('');
     setIsAddSpeakerModalOpen(false);
   };
-  // --- FUNKCJE EDYCJI TEKSTU ---
+  
 
-  // Funkcja, która obsługuje ręczne wpisywanie tekstu
+
+// --- 1. FUNKCJE EDYCJI TEKSTU ---
+
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
 
-    // WAŻNE: Jeśli użytkownik edytuje tekst ręcznie, musimy wyczyścić 'utterances' (klocki AI),
-    // w przeciwnym razie funkcja getDisplayText ciągle nadpisywałaby zmiany użytkownika starą wersją z AI.
-    // Przechodzimy w "Tryb Ręczny".
     const updatedItem = {
       ...selectedItem,
       content: newText,
-      utterances: [] // Czyścimy klocki AI, polegamy teraz na 'content'
+      utterances: [] // Przechodzimy w tryb ręczny (czyścimy klocki AI)
     };
 
-    // Aktualizujemy stan lokalny (szybko)
     setHistory(prev => prev.map(item => item.id === selectedItem.id ? updatedItem : item));
     setSelectedItem(updatedItem);
-    
-    // Zapisujemy do bazy (można dodać debounce dla wydajności, ale na razie save bezpośredni)
     await dbSave(updatedItem);
   };
 
-  // Funkcja wstawiająca tag rozmówcy w miejscu kursora
   const insertSpeakerAtCursor = (speakerKey: string) => {
     if (!textareaRef.current || !selectedItem) return;
 
@@ -325,24 +322,92 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     
-    // Pobieramy aktualny tekst
     const currentText = getDisplayText(selectedItem);
-    
-    // Tworzymy wstawkę, np. "\nROZMÓWCA A:\n"
     const insertText = `\n${getSpeakerName(selectedItem, speakerKey).toUpperCase() || speakerKey}:\n`;
     
-    // Sklejamy tekst: Przed kursorem + Wstawka + Po kursorze
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
 
-    // Aktualizujemy tekst
     handleTextChange(newText);
 
-    // Przywracamy focus na textarea i ustawiamy kursor po wstawce (opcjonalne, ale wygodne)
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start + insertText.length, start + insertText.length);
     }, 0);
   };
+
+  // --- 2. OBSŁUGA MENU KONTEKSTOWEGO (Prawy Przycisk) ---
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault(); 
+    const textarea = e.target as HTMLTextAreaElement;
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      cursorIndex: textarea.selectionStart || 0 
+    });
+  };
+
+  const handleInsertFromContextMenu = (speakerKey: string) => {
+    if (!contextMenu || !selectedItem) return;
+    
+    const label = getSpeakerName(selectedItem, speakerKey) || speakerKey;
+    const insertText = `\n${label.toUpperCase()}:\n`;
+    
+    const currentText = getDisplayText(selectedItem);
+    const newText = currentText.substring(0, contextMenu.cursorIndex) + insertText + currentText.substring(contextMenu.cursorIndex);
+    
+    handleTextChange(newText);
+    setContextMenu(null);
+  };
+
+  // --- 3. PRZESUWANIE OKIENKA (Drag & Drop) ---
+
+  const startDrag = (e: React.MouseEvent) => {
+    if (!contextMenu) return;
+    e.preventDefault();
+    
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: contextMenu.x,
+      initialY: contextMenu.y
+    };
+    
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', stopDrag);
+  };
+
+  const handleDragMove = (e: MouseEvent) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    
+    setContextMenu(prev => prev ? {
+      ...prev,
+      x: dragRef.current!.initialX + dx,
+      y: dragRef.current!.initialY + dy
+    } : null);
+  };
+
+  const stopDrag = () => {
+    dragRef.current = null;
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', stopDrag);
+  };
+
+
+
+
+
+
+
+  // Zamykanie menu po kliknięciu gdziekolwiek indziej
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, []);
 
   const executeDelete = async () => {
     if (!itemToDelete) return;
@@ -606,6 +671,14 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
     setTimeout(() => setCopyState(false), 2000);
   };
 
+
+
+
+
+
+
+
+
   return (
     <main className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans transition-colors duration-300">
       
@@ -837,7 +910,8 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
               ref={textareaRef}
                 className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900 pr-16" // Dodano pr-16 żeby tekst nie wchodził pod guzik
                 value={getDisplayText(selectedItem)} 
-                onChange={(e) => handleTextChange(e.target.value)} // Obsługa pisania 
+                onChange={(e) => handleTextChange(e.target.value)} 
+                onContextMenu={handleContextMenu} 
               />
               
               {/* Pływający przycisk kopiowania (jak w code blocks) */}
@@ -1138,6 +1212,46 @@ const handleDeleteSpeaker = async (speakerKey: string) => {
             <button onClick={() => setIsAddSpeakerModalOpen(false)} className="btn-modal-cancel">Anuluj</button>
             <button onClick={confirmAddSpeaker} className="btn-modal-ok">Dodaj</button>
           </div>
+        </div>
+      </div>
+    )}
+{/* MENU KONTEKSTOWE (Floating Window) */}
+    {contextMenu && contextMenu.visible && (
+      <div 
+        className="context-menu" 
+        style={{ top: contextMenu.y, left: contextMenu.x }}
+        onClick={(e) => e.stopPropagation()} 
+      >
+        <div className="context-menu-handle" onMouseDown={startDrag}>
+          <span className="context-menu-title">Wstaw rozmówcę</span>
+          <div className="context-menu-close" onClick={() => setContextMenu(null)} title="Zamknij">
+            <CloseIcon />
+          </div>
+        </div>
+
+        <div className="context-menu-content">
+          {getAllSpeakers().map((s) => {
+            const label = getSpeakerName(selectedItem!, s) || s;
+            return (
+              <button 
+                key={s} 
+                className="context-menu-item"
+                onClick={() => handleInsertFromContextMenu(s)}
+              >
+                {label}
+              </button>
+            );
+          })}
+          
+          <button 
+            className="context-menu-item text-green-500 font-bold bg-gray-900/30 hover:bg-gray-900/50"
+            onClick={() => {
+              setContextMenu(null);
+              setIsAddSpeakerModalOpen(true);
+            }}
+          >
+            + Nowy rozmówca...
+          </button>
         </div>
       </div>
     )}

@@ -295,6 +295,37 @@
 .btn-add-speaker {
   @apply flex items-center px-3 py-2 rounded-lg border border-dashed border-gray-700 text-gray-500 text-xs font-medium hover:border-gray-500 hover:text-white transition-all bg-transparent;
 }
+/* --- CONTEXT MENU (Floating Window) --- */
+.context-menu {
+  @apply fixed z-50 bg-[#111827] border border-gray-700 rounded-xl shadow-2xl w-64; 
+  /* Usunięto overflow-hidden z głównego kontenera, żeby X mógł "oddychać" */
+  animation: lasto-scale-in 0.1s ease-out;
+}
+
+/* Pasek do przeciągania (Header) */
+.context-menu-handle {
+  @apply bg-gray-800 border-b border-gray-700 px-4 py-3 cursor-grab active:cursor-grabbing;
+  @apply flex items-center justify-between select-none rounded-t-xl; /* Zaokrąglenie góry */
+}
+
+.context-menu-title {
+  @apply text-xs uppercase font-bold text-white tracking-widest;
+}
+
+.context-menu-close {
+  @apply text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg p-1 transition-all cursor-pointer;
+  @apply flex items-center justify-center;
+}
+
+/* Treść menu */
+.context-menu-content {
+  @apply max-h-[300px] overflow-y-auto rounded-b-xl; /* Zaokrąglenie dołu */
+}
+
+.context-menu-item {
+  @apply block w-full text-left px-4 py-3 text-sm text-gray-300 font-medium hover:bg-gray-800 hover:text-white transition-colors cursor-pointer;
+  @apply border-b border-gray-800/50 last:border-0;
+}
 /* --- ANIMACJE (Native) --- */
 @keyframes lasto-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lasto-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
