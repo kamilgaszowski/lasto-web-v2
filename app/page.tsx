@@ -9,7 +9,7 @@ import { DeleteModal, InfoModal, AddSpeakerModal, MergeModal } from '../componen
 import { SettingsModal } from '../components/SettingsModal';
 import { ContextMenu } from '../components/ContextMenu';
 
-// Importy Typów i Logiki
+// Importy Typów i Logiki (z nowych plików)
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete, compressHistory, decompressHistory } from '../lib/storage';
 
@@ -46,7 +46,7 @@ export default function LastoWeb() {
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Button Feedback (Tylko dla Pobierz i Copy, reszta automatyczna)
+  // Button Feedback
   const [copyState, setCopyState] = useState(false);
   const [pobierzState, setPobierzState] = useState(false);
 
@@ -96,14 +96,12 @@ export default function LastoWeb() {
 
   // --- LOGIC: CLOUD SYNC (AUTO) ---
   
-  // Funkcja wywoływana automatycznie przy zmianie kontekstu
+  // 1. Zapis w tle (Triggerowany zmianami)
   const triggerAutoSave = async () => {
     if (!pantryId) return;
-    // Nie blokujemy UI (fire and forget), ale logujemy błąd w konsoli
     try {
         const compressed = compressHistory(history);
         const CHUNK_SIZE = 50;
-        // Wysyłamy w tle
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
             await fetch(`https://getpantry.cloud/apiv1/pantry/${pantryId.trim()}/basket/lastoHistory`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -115,6 +113,25 @@ export default function LastoWeb() {
         }
         console.log("Auto-save completed");
     } catch (e) { console.error("Auto-save failed:", e); }
+  };
+
+  // 2. Zapis natychmiastowy (Dla nowych plików z AI)
+  const saveToCloudImmediately = async (dataToSave: HistoryItem[]) => {
+    if (!pantryId) return;
+    try {
+        const compressed = compressHistory(dataToSave);
+        const CHUNK_SIZE = 50;
+        for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
+            await fetch(`https://getpantry.cloud/apiv1/pantry/${pantryId.trim()}/basket/lastoHistory`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
+                    manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                })
+            });
+        }
+    } catch (e) { console.error("Cloud upload failed", e); }
   };
 
   const loadFromCloud = async () => {
@@ -146,7 +163,87 @@ export default function LastoWeb() {
     finally { setIsProcessing(false); }
   };
 
-  // --- LOGIC: ACTIONS ---
+  // --- LOGIC: UPLOAD & AI (ASSEMBLY AI) ---
+
+  const checkStatus = async (id: string, fileName: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { 
+          headers: { 'Authorization': apiKey } 
+        });
+        if (!res.ok) return;
+        const result = await res.json();
+
+        if (result.status === 'completed') {
+          clearInterval(interval);
+          
+          const uniqueId = `${id}-${Date.now()}`;
+
+          const newItem: HistoryItem = {
+            id: uniqueId, 
+            title: fileName, 
+            date: new Date().toISOString(), 
+            content: result.text, 
+            utterances: result.utterances, 
+            speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } 
+          };
+          
+          await dbSave(newItem);
+
+          setHistory(prev => {
+             const exists = prev.some(item => item.id === uniqueId || item.id.startsWith(id));
+             if (exists) return prev; 
+             const updated = [newItem, ...prev];
+             saveToCloudImmediately(updated); // Wysyłka od razu po sukcesie
+             return updated;
+          });
+
+          setSelectedItem(newItem);
+          setIsProcessing(false);
+          setStatus('');
+        } else if (result.status === 'error') { 
+          clearInterval(interval); 
+          setStatus('Błąd AI'); 
+          setIsProcessing(false); 
+        }
+      } catch (err) { 
+        clearInterval(interval); 
+        setIsProcessing(false); 
+      }
+    }, 3000);
+  };
+
+  const processFile = async (file: File) => {
+    if (!apiKey) return;
+    setIsProcessing(true);
+    setStatus('Wysyłanie...');
+    try {
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': apiKey }, body: file });
+      const { upload_url } = await uploadRes.json();
+      setStatus('Przetwarzanie AI...');
+      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_url: upload_url, language_code: 'pl', speaker_labels: true })
+      });
+      const { id } = await transcriptRes.json();
+      checkStatus(id, file.name);
+    } catch (e) { setStatus('Błąd połączenia'); setTimeout(() => setIsProcessing(false), 3000); }
+  };
+
+  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    setIsDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file && apiKey) processFile(file);
+  };
+
+  // --- LOGIC: ACTIONS (TEXT, SPEAKERS) ---
+
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
     const updatedItem = { ...selectedItem, content: newText, utterances: [] };
@@ -157,8 +254,6 @@ export default function LastoWeb() {
       setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
       setSelectedItem(updatedItem);
       await dbSave(updatedItem);
-      // Uwaga: Tutaj zapisujemy tylko lokalnie dla wydajności.
-      // Pełny sync do Pantry nastąpi przy zmianie pliku/wyjściu (triggerAutoSave).
   };
 
   const handleSpeakerNameChange = async (speakerKey: string, newName: string) => {
@@ -240,18 +335,9 @@ export default function LastoWeb() {
     setHistory([]);
     setSelectedItem(null);
     setIsDeleteAllModalOpen(false);
-    triggerAutoSave(); // Sync pustej listy (wyczyszczenie chmury)
+    triggerAutoSave(); // Sync pustej listy
     setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wszystkie nagrania usunięte.' });
   };
-
-  // --- UPLOAD HANDLERS ---
-  const processFile = async (file: File) => { /* Tu logika AssemblyAI (bez zmian) */ }; 
-  // (Skróciłem dla czytelności, bo nie ruszamy tej logiki w tym kroku, ale w pełnym pliku powinna być)
-  // Wstawiam uproszczoną wersję, żeby plik był kompletny, jeśli jej nie masz:
-  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
-     // ... (tu normalnie jest logika uploadu, jeśli jej brakuje wklej z poprzedniej wersji)
-  };
-  const handleDrop = (event: React.DragEvent) => { event.preventDefault(); setIsDragging(false); };
 
   // --- CONTEXT MENU HANDLERS ---
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -267,11 +353,15 @@ export default function LastoWeb() {
      window.addEventListener('mousemove', handleDragMove);
      window.addEventListener('mouseup', stopDrag);
   };
+
   const handleDragMove = (e: MouseEvent) => {
       const dragData = dragRef.current;
       if (!dragData) return;
-      setContextMenu(prev => prev ? { ...prev, x: dragData.initialX + (e.clientX - dragData.startX), y: dragData.initialY + (e.clientY - dragData.startY) } : null);
+      const dx = e.clientX - dragData.startX;
+      const dy = e.clientY - dragData.startY;
+      setContextMenu(prev => prev ? { ...prev, x: dragData.initialX + dx, y: dragData.initialY + dy } : null);
   };
+
   const stopDrag = () => { dragRef.current = null; window.removeEventListener('mousemove', handleDragMove); window.removeEventListener('mouseup', stopDrag); };
 
   // --- RENDER ---
@@ -286,14 +376,12 @@ export default function LastoWeb() {
             <button onClick={() => { triggerAutoSave(); setIsSidebarOpen(false); }} className="icon-button"><RuneArrowLeft /></button>
           </div>
 
-          {/* USUNIĘTO sidebar-actions-grid (Zapisz/Wyślij) */}
-
           <div className="archive-list">
             {history.map((item) => (
               <div 
                 key={item.id} 
                 onClick={() => { 
-                    triggerAutoSave(); // AUTO-SAVE przy zmianie pliku
+                    triggerAutoSave(); 
                     setSelectedItem(item); 
                     if (window.innerWidth < 768) setIsSidebarOpen(false); 
                 }} 
@@ -306,7 +394,6 @@ export default function LastoWeb() {
             ))}
           </div>
 
-          {/* NOWA STOPKA SIDEBARA */}
           <div className="sidebar-footer flex gap-2">
               <button 
                 onClick={loadFromCloud} 
@@ -331,18 +418,11 @@ export default function LastoWeb() {
           <div className="top-bar-left">
             {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="icon-button"><RuneArrowRight /></button>}
             
-            {/* BUTTON LOGO - AUTO-SAVE PRZY POWROCIE */}
             {selectedItem && (
-                <button 
-                    onClick={() => { triggerAutoSave(); setSelectedItem(null); }} 
-                    className="btn-logo"
-                >
-                    Lasto
-                </button>
+                <button onClick={() => { triggerAutoSave(); setSelectedItem(null); }} className="btn-logo">Lasto</button>
             )}
           </div>
           
-          {/* SETTINGS - AUTO-SAVE PRZY OTWARCIU */}
           <button onClick={() => { triggerAutoSave(); setIsSettingsOpen(true); }} className="settings-trigger"><SettingsIcon /></button>
         </div>
 
@@ -354,11 +434,18 @@ export default function LastoWeb() {
                 <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Pisz</span></div>
               </div>
               <div className="import-zone">
-                  {/* ... (Elementy importu bez zmian) ... */}
-                  <label className="btn-import">
-                      Importuj nagranie
+                {isProcessing ? (
+                  <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
+                ) : !apiKey ? (
+                  <button onClick={() => setIsSettingsOpen(true)} className="btn-primary">Dodaj pierwsze nagranie</button>
+                ) : (
+                  <>
+                    <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
+                      {isDragging ? 'Upuść tutaj!' : 'Importuj nagranie'}
                       <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
-                  </label>
+                    </label>
+                  </>
+                )}
               </div>
             </div>
           ) : (
@@ -378,7 +465,6 @@ export default function LastoWeb() {
                     </div>
                   </div>
                 )}
-                {/* USUNIĘTO PRZYCISK ZAPISZ Z HEADER'A */}
               </div>
 
               {/* LISTA ROZMÓWCÓW */}

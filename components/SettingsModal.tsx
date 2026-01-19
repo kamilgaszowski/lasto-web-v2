@@ -36,15 +36,17 @@ export const SettingsModal = ({ isOpen, onClose, apiKey, setApiKey, pantryId, se
                 <div className="step-content">
                   <p>Klucz API pozwala zamienić Twoje nagrania na tekst.</p>
                   <ul className="list-disc space-y-3 pl-4 font-medium">
-                    <li>Zarejestruj się na <a href="https://www.assemblyai.com/" target="_blank" className="step-link">assemblyai.com.</a></li>
-                    <li>Wejdź do <span className="highlight-text">Dashboard</span> i skopiuj <span className="highlight-text">Your API Key</span></li>
+                    <li>Zarejestruj się na <a href="https://www.assemblyai.com/" target="_blank" className="step-link">assemblyai.com. Przycisk <span>Get started</span></a></li>
+                    <li>Mozesz zalogowac się swoim kontem Gmail. </li>
+                     <li>Skopiuj klucz API oraz zaznacz w drugim kroku  "Notetaker", a w trzecim kroku "Test out the Playground".</li>
+                    <li>Swój klucz znajdziesz tez w zakładce <span className="highlight-text">Dashboard.</span></li>
                   </ul>
                 </div>
               </div>
               <div className="step-container">
                 <div className="step-header"><span className="step-number">2</span><h4 className="step-title">Synchronizacja (Pantry)</h4></div>
                 <div className="step-content">
-                  <p>Pantry ID chroni historię przed wyczyszczeniem danych przeglądarki.</p>
+                  <p>Dzięki Pantry ID historia Twoich nagrań będzie automatycznie zapisywana.</p>
                   <ul className="list-disc space-y-3 pl-4 font-medium">
                     <li>Wejdź na <a href="https://getpantry.cloud/" target="_blank" className="step-link">getpantry.cloud</a></li>
                     <li>Wpisz swój e-mail i kliknij Create a Pantry. Następnie wpisz swoje imię. Skopij ID. Po zamknięciu strony Pantry nie ma moliwośći powtórnego skopiowania ID. Zapisz je w bezpiecznym miejscu, aby mieć dostęp do historii nagrań.</li>
@@ -72,6 +74,7 @@ export const SettingsModal = ({ isOpen, onClose, apiKey, setApiKey, pantryId, se
               </form>
               <div className="backup-section">
                 <label className="settings-label">Backup kluczy</label>
+             
                 <div className="backup-grid">
                   <button onClick={exportKeys} className="btn-backup">Zapisz do pliku</button>
                   <label className="btn-backup">Wczytaj plik <input type="file" className="hidden" accept=".json" onChange={importKeys} /></label>
