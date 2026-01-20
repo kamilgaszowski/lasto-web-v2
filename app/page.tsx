@@ -52,7 +52,7 @@ export default function LastoWeb() {
 
   const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
 
-  // --- INIT & AUTO-SYNC NA STARCIE ---
+  // --- INIT & AUTO-SYNC ---
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
     const savedPantryId = localStorage.getItem('pantryId') || '';
@@ -60,15 +60,12 @@ export default function LastoWeb() {
 
     const initData = async () => {
         try {
-            // 1. Najpierw ładujemy to co mamy lokalnie (natychmiast)
             const items = await dbGetAll();
             const sorted = items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             setHistory(sorted);
             
-            // 2. Jeśli mamy ID, próbujemy odświeżyć z chmury (Sync przy F5)
+            // Próba odświeżenia po starcie (silent)
             if (savedPantryId) {
-                // isSilent = true, żeby nie atakować modalem "Sukces" przy każdym wejściu na stronę
-                // Ale to pobierze nowe dane i zaktualizuje widok
                 loadFromCloud(true);
             }
         } catch (e) { console.error("Błąd bazy danych:", e); }
@@ -76,11 +73,11 @@ export default function LastoWeb() {
     initData();
   }, []); 
 
-  // --- PERIODYCZNE POBIERANIE (POLLING - Zwiększono czas) ---
+  // --- PERIODYCZNE POBIERANIE (POLLING) ---
   useEffect(() => {
     if (!pantryId) return;
 
-    // Zwiększamy interwał do 60 sekund, żeby unikać błędu 429
+    // Co 60 sekund sprawdzamy zmiany w tle
     const interval = setInterval(() => {
         if (!isEditingTitle) {
             loadFromCloud(true);
@@ -150,7 +147,6 @@ export default function LastoWeb() {
                     }
                 })
             });
-            // Ignorujemy 429 przy auto-save (po prostu nie zapisze tym razem, spróbuje później)
             if (!response.ok && response.status !== 429) console.warn(`Auto-save warning: ${response.status}`);
         }
         console.log("Auto-save completed");
@@ -181,7 +177,6 @@ export default function LastoWeb() {
     } catch (e) { console.error("Cloud upload failed", e); }
   };
 
-  // --- FUNKCJA POBIERANIA (Z OBSŁUGĄ BŁĘDU 429) ---
   const loadFromCloud = async (isSilent = false) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) {
@@ -192,18 +187,17 @@ export default function LastoWeb() {
     if (!isSilent) setIsProcessing(true);
     
     try {
-        const res = await fetch(`/api/pantry?id=${cleanId}`, { 
+        // Używamy Proxy i znacznika czasu, żeby ominąć cache
+        const res = await fetch(`/api/pantry?id=${cleanId}&t=${Date.now()}`, { 
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
         
-        // --- OBSŁUGA BŁĘDU 429 (ZA DUŻO ZAPYTAŃ) ---
         if (res.status === 429) {
-            console.warn("Przekroczono limit zapytań (429). Czekam...");
+            console.warn("Przekroczono limit zapytań (429).");
             if (!isSilent) {
-                setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Za dużo prób synchronizacji. Odczekaj minutę.' });
+                setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Serwer zajęty. Odczekaj chwilę.' });
             }
-            // Nie rzucamy błędu, po prostu przerywamy cicho
             setIsProcessing(false);
             return; 
         }
@@ -246,7 +240,7 @@ export default function LastoWeb() {
                         const remoteDate = new Date(remoteItem.date).getTime();
                         const localDate = new Date(localItem.date).getTime();
 
-                        // Sync: Jeśli w chmurze nowszy
+                        // Sync: Jeśli w chmurze nowszy (> 1s)
                         if (remoteDate > localDate + 1000) {
                             localMap.set(remoteItem.id, remoteItem);
                             updatesCount++;
@@ -263,7 +257,7 @@ export default function LastoWeb() {
                         message: `Pobrano: ${newCount}, Zaktualizowano: ${updatesCount}` 
                     });
                 } else if (!isSilent) {
-                    setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Wszystkie nagrania są aktualne.' });
+                    setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Masz najnowszą wersję.' });
                 }
                 
                 if (newCount > 0 || updatesCount > 0) {
@@ -313,7 +307,7 @@ export default function LastoWeb() {
             localStorage.setItem('pantryId', imported.pantryId); 
             setTimeout(() => loadFromCloud(false), 500);
           }
-          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane. Trwa pobieranie...' });
+          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane.' });
         } else {
             throw new Error("Brak kluczy w pliku");
         }
@@ -421,20 +415,38 @@ export default function LastoWeb() {
     return () => window.removeEventListener('paste', handlePaste);
   }, [isSettingsOpen, selectedItem, apiKey]);
 
-  // --- ACTIONS ---
+  // --- ACTIONS (TEXT SAVE FIX) ---
+
+  // 1. Zmiana w trakcie pisania (tylko UI, bez zapisu do chmury)
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
     const updatedItem = { ...selectedItem, content: newText, utterances: [] };
+    
+    // Aktualizujemy stan i DB lokalnie, ale NIE triggerujemy auto-save, żeby nie zabić limitu 429
     setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
     setSelectedItem(updatedItem);
     await dbSave(updatedItem);
   };
 
+  // 2. ZAPIS DO CHMURY PRZY WYJŚCIU Z POLA (Fix)
+  const handleTextBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+      if (!selectedItem) return;
+      // Bierzemy tekst bezpośrednio z elementu, żeby ominąć opóźnienia stanu
+      const currentText = e.target.value;
+      const updatedItem = { ...selectedItem, content: currentText, utterances: [] };
+      
+      // Teraz wywołujemy pełny zapis (z aktualizacją daty i wysyłką do chmury)
+      updateAndSave(updatedItem);
+  };
+
+  // Funkcja aktualizująca datę i wysyłająca do chmury
   const updateAndSave = async (updatedItem: HistoryItem) => {
       const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
       setHistory(prev => {
           const newHistory = prev.map(item => item.id === itemWithNewDate.id ? itemWithNewDate : item);
           const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          // Wyzwól synchronizację z nową listą
           triggerAutoSave(sorted); 
           return sorted;
       });
@@ -497,6 +509,7 @@ export default function LastoWeb() {
     const insertText = `\n${name.toUpperCase()}:\n`;
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
+    // Tutaj musimy wywołać updateAndSave, bo to jest akcja "jednorazowa" (nie ciągłe pisanie)
     const updatedItem = { ...selectedItem, content: newText, utterances: [] };
     updateAndSave(updatedItem);
     
@@ -704,7 +717,7 @@ export default function LastoWeb() {
                   className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
                   value={getDisplayText(selectedItem)} 
                   onChange={(e) => handleTextChange(e.target.value)} 
-                  onBlur={() => updateAndSave(selectedItem!)} 
+                  onBlur={handleTextBlur} // <--- TUTAJ JEST NAPRAWA
                   onContextMenu={handleContextMenu} 
                 />
                 <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} 
