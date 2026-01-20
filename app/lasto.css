@@ -326,6 +326,33 @@
   @apply block w-full text-left px-4 py-3 text-sm text-gray-300 font-medium hover:bg-gray-800 hover:text-white transition-colors cursor-pointer;
   @apply border-b border-gray-800/50 last:border-0;
 }
+/* --- MOBILE TOOLBAR (Pasek na dole) --- */
+.mobile-toolbar {
+  @apply fixed bottom-0 left-0 right-0 z-40 flex items-center gap-2 px-4 py-3 bg-[#111827] border-t border-gray-800;
+  @apply overflow-x-auto whitespace-nowrap;
+  /* Obsługa iPhone'ów bez przycisku Home (żeby pasek nie wchodził na dół ekranu) */
+  padding-bottom: env(safe-area-inset-bottom, 12px); 
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+}
+
+.mobile-toolbar-btn {
+  @apply flex items-center justify-center px-4 py-2 rounded-lg bg-gray-800 text-gray-200 text-xs font-bold uppercase tracking-wider border border-gray-700;
+  @apply active:scale-95 transition-transform; /* Efekt kliknięcia */
+}
+
+.mobile-toolbar-add {
+  @apply w-8 h-8 flex items-center justify-center rounded-full bg-gray-800 text-green-500 border border-dashed border-gray-600 ml-2 flex-shrink-0;
+}
+
+/* Ukrywamy scrollbar, ale pozwalamy przewijać */
+.mobile-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.mobile-toolbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* --- ANIMACJE (Native) --- */
 @keyframes lasto-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lasto-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
