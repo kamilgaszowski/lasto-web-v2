@@ -539,29 +539,7 @@ export default function LastoWeb() {
                 <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} 
                   className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
               </div>
-              {/* MOBILE TOOLBAR - Widoczny tylko na ekranach mniejszych niż md (768px) */}
-              <div className="mobile-toolbar md:hidden">
-                {getAllSpeakers().map((key) => (
-                  <button 
-                    key={key}
-                    onClick={(e) => {
-                      e.preventDefault(); // Żeby nie tracić focusu z klawiatury (opcjonalne, ale pomocne)
-                      insertSpeakerAtCursor(key);
-                    }}
-                    className="mobile-toolbar-btn"
-                  >
-                    {getSpeakerName(key) || key}
-                  </button>
-                ))}
-                
-                <button 
-                  onClick={() => setIsAddSpeakerModalOpen(true)} 
-                  className="mobile-toolbar-add"
-                  title="Nowy rozmówca"
-                >
-                  +
-                </button>
-              </div>
+           
             </div>
           )}
         </div>
