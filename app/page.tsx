@@ -13,6 +13,7 @@ import { ContextMenu } from '../components/ContextMenu';
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete, compressHistory, decompressHistory } from '../lib/storage';
 
+
 export default function LastoWeb() {
   // --- STATE ---
   const [apiKey, setApiKey] = useState('');
