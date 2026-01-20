@@ -20,8 +20,13 @@ export default function LastoWeb() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
   
+  // Refy dla Auto-Save (Debounce)
+  const selectedItemRef = useRef<HistoryItem | null>(null);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   // UI State
   const [status, setStatus] = useState('');
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle'); // Nowy stan dla statusu chmury
   const [uploadStatus, setUploadStatus] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
@@ -52,6 +57,11 @@ export default function LastoWeb() {
 
   const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
 
+  // --- REFS SYNC ---
+  useEffect(() => {
+    selectedItemRef.current = selectedItem;
+  }, [selectedItem]);
+
   // --- INIT & AUTO-SYNC ---
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
@@ -64,7 +74,6 @@ export default function LastoWeb() {
             const sorted = items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             setHistory(sorted);
             
-            // Próba odświeżenia po starcie (silent)
             if (savedPantryId) {
                 loadFromCloud(true);
             }
@@ -73,21 +82,19 @@ export default function LastoWeb() {
     initData();
   }, []); 
 
-  // --- PERIODYCZNE POBIERANIE (POLLING) ---
+  // --- POLLING (Co 60s) ---
   useEffect(() => {
     if (!pantryId) return;
-
-    // Co 60 sekund sprawdzamy zmiany w tle
     const interval = setInterval(() => {
-        if (!isEditingTitle) {
+        // Nie pobieraj, jeśli użytkownik pisze (status saving) lub edytuje tytuł
+        if (!isEditingTitle && cloudStatus !== 'saving') {
             loadFromCloud(true);
         }
     }, 60000); 
-
     return () => clearInterval(interval);
-  }, [pantryId, isEditingTitle]);
+  }, [pantryId, isEditingTitle, cloudStatus]);
 
-  // --- ZAMYKANIE CONTEXT MENU KLIKNIĘCIEM POZA ---
+  // --- CLOSE CONTEXT MENU ---
   useEffect(() => {
     const handleClickOutside = () => {
       if (contextMenu) setContextMenu(null);
@@ -124,12 +131,13 @@ export default function LastoWeb() {
     }).join('\n');
   };
 
-  // --- LOGIC: CLOUD SYNC (PROXY) ---
+  // --- LOGIC: CLOUD SYNC ---
   
   const triggerAutoSave = async (overrideHistory?: HistoryItem[]) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
 
+    setCloudStatus('saving'); // Pokaż status "Zapisywanie..."
     const dataToSave = overrideHistory || history;
 
     try {
@@ -147,11 +155,13 @@ export default function LastoWeb() {
                     }
                 })
             });
-            if (!response.ok && response.status !== 429) console.warn(`Auto-save warning: ${response.status}`);
+            if (!response.ok && response.status !== 429) throw new Error(response.statusText);
         }
-        console.log("Auto-save completed");
+        setCloudStatus('saved'); // Sukces
+        setTimeout(() => setCloudStatus('idle'), 3000); // Ukryj po 3s
     } catch (e) { 
         console.warn("Auto-save skipped:", e); 
+        setCloudStatus('error');
     }
   };
 
@@ -187,23 +197,19 @@ export default function LastoWeb() {
     if (!isSilent) setIsProcessing(true);
     
     try {
-        // Używamy Proxy i znacznika czasu, żeby ominąć cache
         const res = await fetch(`/api/pantry?id=${cleanId}&t=${Date.now()}`, { 
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
         
         if (res.status === 429) {
-            console.warn("Przekroczono limit zapytań (429).");
-            if (!isSilent) {
-                setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Serwer zajęty. Odczekaj chwilę.' });
-            }
+            if (!isSilent) setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Za dużo zapytań. Odczekaj chwilę.' });
             setIsProcessing(false);
             return; 
         }
 
         if (res.status === 404) {
-             if (!isSilent) setInfoModal({ isOpen: true, title: 'Info', message: 'Chmura jest pusta. Zapisz coś najpierw.' });
+             if (!isSilent) setInfoModal({ isOpen: true, title: 'Info', message: 'Chmura jest pusta.' });
              setIsProcessing(false);
              return;
         }
@@ -228,6 +234,8 @@ export default function LastoWeb() {
                 const localMap = new Map(prev.map(item => [item.id, item]));
                 let updatesCount = 0;
                 let newCount = 0;
+                
+                const currentOpenItem = selectedItemRef.current;
 
                 remoteHistory.forEach(remoteItem => {
                     const localItem = localMap.get(remoteItem.id);
@@ -240,24 +248,24 @@ export default function LastoWeb() {
                         const remoteDate = new Date(remoteItem.date).getTime();
                         const localDate = new Date(localItem.date).getTime();
 
-                        // Sync: Jeśli w chmurze nowszy (> 1s)
-                        if (remoteDate > localDate + 1000) {
+                        if (remoteDate > localDate) {
                             localMap.set(remoteItem.id, remoteItem);
                             updatesCount++;
                             dbSave(remoteItem);
-                            if (selectedItem?.id === remoteItem.id) setSelectedItem(remoteItem);
+                            
+                            if (currentOpenItem?.id === remoteItem.id) {
+                                setSelectedItem(remoteItem);
+                            }
                         }
                     }
                 });
 
-                if (!isSilent && (newCount > 0 || updatesCount > 0)) {
-                    setInfoModal({ 
-                        isOpen: true, 
-                        title: 'Synchronizacja', 
-                        message: `Pobrano: ${newCount}, Zaktualizowano: ${updatesCount}` 
-                    });
-                } else if (!isSilent) {
-                    setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Masz najnowszą wersję.' });
+                if (!isSilent) {
+                    if (newCount > 0 || updatesCount > 0) {
+                        setInfoModal({ isOpen: true, title: 'Sukces', message: `Pobrano: ${newCount}, Zaktualizowano: ${updatesCount}` });
+                    } else {
+                        setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Wszystko aktualne.' });
+                    }
                 }
                 
                 if (newCount > 0 || updatesCount > 0) {
@@ -269,7 +277,7 @@ export default function LastoWeb() {
             });
             setIsSettingsOpen(false);
         } else {
-            if (!isSilent) setInfoModal({ isOpen: true, title: 'Pusto', message: 'W chmurze nie ma danych.' });
+            if (!isSilent) setInfoModal({ isOpen: true, title: 'Pusto', message: 'Brak danych w chmurze.' });
         }
     } catch (e: any) { 
         console.error(e);
@@ -298,22 +306,11 @@ export default function LastoWeb() {
       try {
         const imported = JSON.parse(e.target?.result as string);
         if (imported.assemblyAIKey || imported.pantryId) {
-          if (imported.assemblyAIKey) { 
-            setApiKey(imported.assemblyAIKey); 
-            localStorage.setItem('assemblyAIKey', imported.assemblyAIKey); 
-          }
-          if (imported.pantryId) { 
-            setPantryId(imported.pantryId); 
-            localStorage.setItem('pantryId', imported.pantryId); 
-            setTimeout(() => loadFromCloud(false), 500);
-          }
+          if (imported.assemblyAIKey) { setApiKey(imported.assemblyAIKey); localStorage.setItem('assemblyAIKey', imported.assemblyAIKey); }
+          if (imported.pantryId) { setPantryId(imported.pantryId); localStorage.setItem('pantryId', imported.pantryId); setTimeout(() => loadFromCloud(false), 500); }
           setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane.' });
-        } else {
-            throw new Error("Brak kluczy w pliku");
-        }
-      } catch (err) { 
-        setInfoModal({ isOpen: true, title: 'Błąd', message: 'Nieprawidłowy format pliku.' }); 
-      }
+        } else { throw new Error("Brak kluczy"); }
+      } catch (err) { setInfoModal({ isOpen: true, title: 'Błąd', message: 'Zły format pliku.' }); }
     };
     reader.readAsText(file);
     event.target.value = '';
@@ -323,28 +320,14 @@ export default function LastoWeb() {
   const checkStatus = async (id: string, fileName: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { 
-          headers: { 'Authorization': apiKey } 
-        });
+        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { headers: { 'Authorization': apiKey } });
         if (!res.ok) return;
         const result = await res.json();
-
         if (result.status === 'completed') {
           clearInterval(interval);
-          
           const uniqueId = `${id}-${Date.now()}`;
-
-          const newItem: HistoryItem = {
-            id: uniqueId, 
-            title: fileName, 
-            date: new Date().toISOString(), 
-            content: result.text, 
-            utterances: result.utterances, 
-            speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } 
-          };
-          
+          const newItem: HistoryItem = { id: uniqueId, title: fileName, date: new Date().toISOString(), content: result.text, utterances: result.utterances, speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } };
           await dbSave(newItem);
-
           setHistory(prev => {
              const exists = prev.some(item => item.id === uniqueId || item.id.startsWith(id));
              if (exists) return prev; 
@@ -352,19 +335,11 @@ export default function LastoWeb() {
              saveToCloudImmediately(updated);
              return updated;
           });
-
           setSelectedItem(newItem);
           setIsProcessing(false);
           setStatus('');
-        } else if (result.status === 'error') { 
-          clearInterval(interval); 
-          setStatus('Błąd AI'); 
-          setIsProcessing(false); 
-        }
-      } catch (err) { 
-        clearInterval(interval); 
-        setIsProcessing(false); 
-      }
+        } else if (result.status === 'error') { clearInterval(interval); setStatus('Błąd AI'); setIsProcessing(false); }
+      } catch (err) { clearInterval(interval); setIsProcessing(false); }
     }, 3000);
   };
 
@@ -389,12 +364,9 @@ export default function LastoWeb() {
     const file = event.target.files?.[0];
     if (file) processFile(file);
   };
-
   const handleDrop = (event: React.DragEvent) => {
-    event.preventDefault();
-    setIsDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file && apiKey) processFile(file);
+    event.preventDefault(); setIsDragging(false);
+    const file = event.dataTransfer.files?.[0]; if (file && apiKey) processFile(file);
   };
 
   // --- PASTE HANDLER ---
@@ -403,50 +375,66 @@ export default function LastoWeb() {
       if (isSettingsOpen || selectedItem) return;
       if (e.clipboardData && e.clipboardData.files.length > 0) {
         const file = e.clipboardData.files[0];
-        if (file.type.startsWith('audio/')) {
-          e.preventDefault();
-          processFile(file);
-        } else {
-           setInfoModal({ isOpen: true, title: 'Błąd', message: 'To nie jest plik audio.' });
-        }
+        if (file.type.startsWith('audio/')) { e.preventDefault(); processFile(file); } 
+        else { setInfoModal({ isOpen: true, title: 'Błąd', message: 'To nie audio.' }); }
       }
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [isSettingsOpen, selectedItem, apiKey]);
 
-  // --- ACTIONS (TEXT SAVE FIX) ---
-
-  // 1. Zmiana w trakcie pisania (tylko UI, bez zapisu do chmury)
+  // --- ACTIONS (DEBOUNCED TEXT SAVE) ---
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
-    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
     
-    // Aktualizujemy stan i DB lokalnie, ale NIE triggerujemy auto-save, żeby nie zabić limitu 429
+    // 1. Natychmiastowa aktualizacja lokalnie (UI + DB)
+    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
     setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
     setSelectedItem(updatedItem);
     await dbSave(updatedItem);
+
+    // 2. Reset timera
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setCloudStatus('idle');
+
+    // 3. Ustawienie nowego timera (2 sekundy ciszy = zapis)
+    saveTimeoutRef.current = setTimeout(async () => {
+        // POBIERZ AKTUALNE ID Z REF-A (żeby uniknąć starych closures)
+        const currentItem = selectedItemRef.current;
+        if (!currentItem) return;
+
+        // Używamy zaktualizowanego tekstu (przekazanego w newText)
+        // Musimy zrekonstruować obiekt, bo selectedItemRef może być o krok do tyłu
+        const finalItemToSave = { 
+            ...currentItem, 
+            content: newText,
+            utterances: [], // Jeśli edytujesz tekst, usuwamy stare utterances
+            date: new Date().toISOString() // WAŻNE: Aktualizacja daty
+        };
+
+        // Aktualizacja stanu Historii z nową datą
+        setHistory(prev => {
+            const newHistory = prev.map(item => item.id === finalItemToSave.id ? finalItemToSave : item);
+            const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            
+            // Wywołaj wysyłkę do chmury
+            triggerAutoSave(sorted);
+            return sorted;
+        });
+
+        // Zapisz ostateczną wersję z nową datą w DB
+        await dbSave(finalItemToSave);
+        // Zaktualizuj selectedItem żeby miał nową datę
+        setSelectedItem(finalItemToSave);
+
+    }, 2000); // 2000ms opóźnienia
   };
 
-  // 2. ZAPIS DO CHMURY PRZY WYJŚCIU Z POLA (Fix)
-  const handleTextBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
-      if (!selectedItem) return;
-      // Bierzemy tekst bezpośrednio z elementu, żeby ominąć opóźnienia stanu
-      const currentText = e.target.value;
-      const updatedItem = { ...selectedItem, content: currentText, utterances: [] };
-      
-      // Teraz wywołujemy pełny zapis (z aktualizacją daty i wysyłką do chmury)
-      updateAndSave(updatedItem);
-  };
-
-  // Funkcja aktualizująca datę i wysyłająca do chmury
   const updateAndSave = async (updatedItem: HistoryItem) => {
       const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
       setHistory(prev => {
           const newHistory = prev.map(item => item.id === itemWithNewDate.id ? itemWithNewDate : item);
           const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          
-          // Wyzwól synchronizację z nową listą
           triggerAutoSave(sorted); 
           return sorted;
       });
@@ -464,10 +452,7 @@ export default function LastoWeb() {
 
   const handleSpeakerNameChange = async (speakerKey: string, newName: string) => {
     if (!selectedItem) return;
-    const updatedItem = {
-        ...selectedItem,
-        speakerNames: { ...selectedItem.speakerNames, [speakerKey]: newName }
-    };
+    const updatedItem = { ...selectedItem, speakerNames: { ...selectedItem.speakerNames, [speakerKey]: newName } };
     await updateAndSave(updatedItem);
   };
 
@@ -476,114 +461,85 @@ export default function LastoWeb() {
     const currentKeys = getAllSpeakers();
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let newKey = "";
-    for (let char of alphabet) {
-      if (!currentKeys.includes(char)) { newKey = char; break; }
-    }
+    for (let char of alphabet) { if (!currentKeys.includes(char)) { newKey = char; break; } }
     if (!newKey) newKey = `S${currentKeys.length + 1}`;
     handleSpeakerNameChange(newKey, name || newKey);
     setIsAddSpeakerModalOpen(false);
   };
 
-  const handleDeleteSpeakerClick = (speakerKey: string) => {
-    setSpeakerToDelete(speakerKey);
-  };
+  const handleDeleteSpeakerClick = (speakerKey: string) => { setSpeakerToDelete(speakerKey); };
 
   const executeMerge = async (source: string, target: string) => {
     if (!selectedItem) return;
     const newUtterances = selectedItem.utterances?.map(u => ({ ...u, speaker: u.speaker === source ? target : u.speaker })) || [];
-    const newNames = { ...selectedItem.speakerNames };
-    delete newNames[source]; 
+    const newNames = { ...selectedItem.speakerNames }; delete newNames[source]; 
     const updatedItem = { ...selectedItem, speakerNames: newNames, utterances: newUtterances };
     await updateAndSave(updatedItem);
     setIsMergeModalOpen(false);
   };
 
-  // --- EDITOR INSERT ---
   const insertSpeakerAtCursor = (speakerKey: string) => {
     if (!textareaRef.current || !selectedItem) return;
     const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
+    const start = textarea.selectionStart; const end = textarea.selectionEnd;
     const currentText = getDisplayText(selectedItem!);
     const name = getSpeakerName(speakerKey) || speakerKey;
     const insertText = `\n${name.toUpperCase()}:\n`;
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
-    // Tutaj musimy wywołać updateAndSave, bo to jest akcja "jednorazowa" (nie ciągłe pisanie)
+    // To jest duża zmiana, więc zapisujemy od razu (nie debounce)
     const updatedItem = { ...selectedItem, content: newText, utterances: [] };
     updateAndSave(updatedItem);
     
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + insertText.length, start + insertText.length);
-    }, 0);
+    setTimeout(() => { textarea.focus(); textarea.setSelectionRange(start + insertText.length, start + insertText.length); }, 0);
   };
 
-  // --- DELETION ---
   const executeDeleteFile = async () => {
-    if (!itemToDelete) return;
-    setIsProcessing(true);
+    if (!itemToDelete) return; setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
         const updatedHistory = history.filter(item => item.id !== itemToDelete.id);
         setHistory(updatedHistory);
         triggerAutoSave(updatedHistory); 
-
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
-        setIsDeleteModalOpen(false);
-        setItemToDelete(null);
-    } catch (e) { console.error(e); } 
-    finally { setIsProcessing(false); }
+        setIsDeleteModalOpen(false); setItemToDelete(null);
+    } catch (e) { console.error(e); } finally { setIsProcessing(false); }
   };
 
   const confirmSpeakerDeletion = async () => {
     if (!selectedItem || !speakerToDelete) return;
-    const newNames = { ...selectedItem.speakerNames };
-    delete newNames[speakerToDelete]; 
+    const newNames = { ...selectedItem.speakerNames }; delete newNames[speakerToDelete]; 
     const newUtterances = selectedItem.utterances?.filter(u => u.speaker !== speakerToDelete) || [];
     await updateAndSave({ ...selectedItem, speakerNames: newNames, utterances: newUtterances });
     setSpeakerToDelete(null);
   };
 
   const executeDeleteAll = async () => {
-    setHistory([]);
-    setSelectedItem(null);
-    setIsDeleteAllModalOpen(false);
-    triggerAutoSave([]); 
-    setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wszystkie nagrania usunięte.' });
+    setHistory([]); setSelectedItem(null); setIsDeleteAllModalOpen(false); triggerAutoSave([]); 
+    setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Usunięto wszystko.' });
   };
 
   // --- CONTEXT MENU ---
   const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault(); 
-    e.stopPropagation(); 
+    e.preventDefault(); e.stopPropagation(); 
     const textarea = e.target as HTMLTextAreaElement;
     setContextMenu({ visible: true, x: e.clientX, y: e.clientY, cursorIndex: textarea.selectionStart || 0 });
   };
-
   const startDrag = (e: React.MouseEvent) => {
-     if (!contextMenu) return;
-     e.preventDefault();
-     e.stopPropagation();
+     if (!contextMenu) return; e.preventDefault(); e.stopPropagation();
      dragRef.current = { startX: e.clientX, startY: e.clientY, initialX: contextMenu.x, initialY: contextMenu.y };
-     window.addEventListener('mousemove', handleDragMove);
-     window.addEventListener('mouseup', stopDrag);
+     window.addEventListener('mousemove', handleDragMove); window.addEventListener('mouseup', stopDrag);
   };
-
   const handleDragMove = (e: MouseEvent) => {
-      const dragData = dragRef.current;
-      if (!dragData) return;
-      const dx = e.clientX - dragData.startX;
-      const dy = e.clientY - dragData.startY;
+      const dragData = dragRef.current; if (!dragData) return;
+      const dx = e.clientX - dragData.startX; const dy = e.clientY - dragData.startY;
       setContextMenu(prev => prev ? { ...prev, x: dragData.initialX + dx, y: dragData.initialY + dy } : null);
   };
-
   const stopDrag = () => { dragRef.current = null; window.removeEventListener('mousemove', handleDragMove); window.removeEventListener('mouseup', stopDrag); };
 
   // --- RENDER ---
   return (
     <main className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans transition-colors duration-300">
-      {/* SIDEBAR */}
       <div className={`lasto-sidebar ${isSidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
         <div className="sidebar-content">
           <div className="sidebar-header">
@@ -592,14 +548,7 @@ export default function LastoWeb() {
           </div>
           <div className="archive-list">
             {history.map((item) => (
-              <div 
-                key={item.id} 
-                onClick={() => { 
-                    setSelectedItem(item); 
-                    if (window.innerWidth < 768) setIsSidebarOpen(false); 
-                }} 
-                className={`archive-item cursor-pointer ${selectedItem?.id === item.id ? 'archive-item-active' : ''}`}
-              >
+              <div key={item.id} onClick={() => { setSelectedItem(item); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className={`archive-item cursor-pointer ${selectedItem?.id === item.id ? 'archive-item-active' : ''}`}>
                 <button onClick={(e) => { e.stopPropagation(); setItemToDelete(item); setIsDeleteModalOpen(true); }} className="archive-delete-btn"><CloseIcon /></button>
                 <div className="archive-item-title">{item.title || "Bez tytułu"}</div>
                 <div className="archive-item-date">{new Date(item.date).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
@@ -607,23 +556,13 @@ export default function LastoWeb() {
             ))}
           </div>
           <div className="sidebar-footer flex gap-2">
-              <button 
-                onClick={() => loadFromCloud(false)} 
-                disabled={!pantryId || isProcessing} 
-                className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600'}`}
-              >
+              <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600'}`}>
                 <span>{pobierzState ? 'Pobrano' : 'Pobierz'}</span>
               </button>
-              {history.length > 0 && (
-                <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum">
-                    <TrashIcon />
-                </button>
-              )}
+              {history.length > 0 && <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum"><TrashIcon /></button>}
           </div>
         </div>
       </div>
-
-      {/* MAIN PANEL */}
       <div className={`lasto-main-panel ${isSidebarOpen ? 'md:ml-80 ml-0' : 'ml-0'}`}>
         <div className="top-bar">
           <div className="top-bar-left">
@@ -632,7 +571,6 @@ export default function LastoWeb() {
           </div>
           <button onClick={() => { setIsSettingsOpen(true); }} className="settings-trigger"><SettingsIcon /></button>
         </div>
-
         <div className="workspace-area">
           {!selectedItem ? (
             <div className="hero-container">
@@ -644,28 +582,16 @@ export default function LastoWeb() {
                 {isProcessing ? (
                   <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
               ) : !apiKey ? (
-                  <button 
-                    onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} 
-                    className="btn-primary"
-                  >
-                    Dodaj pierwsze nagranie
-                  </button>
+                  <button onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} className="btn-primary">Dodaj pierwsze nagranie</button>
                 ) : (
                   <>
                     <div className="flex flex-col items-center gap-4">
-                      <label 
-                        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} 
-                        onDragLeave={() => setIsDragging(false)} 
-                        onDrop={handleDrop} 
-                        className={`btn-import ${isDragging ? 'import-dragging' : ''}`}
-                      >
+                      <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
                         {isDragging ? 'Upuść tutaj!' : 'Wybierz lub nagraj'}
                         <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
                       </label>
                     </div>
-                    <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">
-                      PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach
-                    </p>
+                    <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach</p>
                   </>
                 )}
               </div>
@@ -675,14 +601,7 @@ export default function LastoWeb() {
               <div className="flex items-center justify-between pb-6 border-b border-gray-800/50 mb-6">
                 {isEditingTitle ? (
                   <div className="flex items-center w-full min-w-0">
-                    <input 
-                        className="bg-transparent text-xl md:text-2xl font-light text-white tracking-wide border-b border-gray-600 focus:border-white outline-none w-full p-0 m-0" 
-                        value={editedTitle} 
-                        onChange={(e) => setEditedTitle(e.target.value)} 
-                        onKeyDown={(e) => e.key === 'Enter' && saveNewTitle()} 
-                        onBlur={saveNewTitle} 
-                        autoFocus 
-                    />
+                    <input className="bg-transparent text-xl md:text-2xl font-light text-white tracking-wide border-b border-gray-600 focus:border-white outline-none w-full p-0 m-0" value={editedTitle} onChange={(e) => setEditedTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveNewTitle()} onBlur={saveNewTitle} autoFocus />
                     <button onClick={saveNewTitle} className="ml-4 text-green-600 p-2"><CheckIcon /></button>
                   </div>
                 ) : (
@@ -690,12 +609,17 @@ export default function LastoWeb() {
                     <button onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} className="mr-4 text-gray-400 hover:text-red-500 p-2 transition-colors flex-shrink-0"><TrashIcon /></button>
                     <div className="flex items-center gap-3 cursor-pointer hover:text-gray-300 transition-colors min-w-0 overflow-hidden" onClick={() => { setEditedTitle(selectedItem.title || ""); setIsEditingTitle(true); }}>
                       <h1 className="text-xl md:text-2xl font-light text-white tracking-wide truncate">{selectedItem.title || "Bez tytułu"}</h1>
-                      <span className="opacity-50 text-sm flex-shrink-0"><EditIcon /></span>
+                      
+                      {/* STATUS CHMURY OBOK TYTUŁU */}
+                      {cloudStatus === 'saving' && <span className="ml-3 text-[10px] text-gray-500 animate-pulse uppercase tracking-wider">Zapisywanie...</span>}
+                      {cloudStatus === 'saved' && <span className="ml-3 text-[10px] text-green-500 uppercase tracking-wider">Zapisano</span>}
+                      {cloudStatus === 'error' && <span className="ml-3 text-[10px] text-red-500 uppercase tracking-wider">Błąd zapisu</span>}
+                      
+                      <span className="opacity-50 text-sm flex-shrink-0 ml-2"><EditIcon /></span>
                     </div>
                   </div>
                 )}
               </div>
-
             <div className="speaker-list">
               {getAllSpeakers().map((speakerKey) => {
                 const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined ? selectedItem.speakerNames[speakerKey] : speakerKey;
@@ -710,24 +634,21 @@ export default function LastoWeb() {
              <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">Nowy</button>
              {getAllSpeakers().length > 1 && <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">Scal rozmówców</button>}
             </div>
-
               <div className="relative flex-1 w-full min-h-0">
                 <textarea 
-                  ref={textareaRef} 
-                  className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
-                  value={getDisplayText(selectedItem)} 
-                  onChange={(e) => handleTextChange(e.target.value)} 
-                  onBlur={handleTextBlur} // <--- TUTAJ JEST NAPRAWA
-                  onContextMenu={handleContextMenu} 
+                    key={selectedItem.id} 
+                    ref={textareaRef} 
+                    className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
+                    value={getDisplayText(selectedItem)} 
+                    onChange={(e) => handleTextChange(e.target.value)} 
+                    onContextMenu={handleContextMenu} 
                 />
-                <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} 
-                  className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
+                <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
               </div>
             </div>
           )}
         </div>
       </div>
-
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} setApiKey={setApiKey} pantryId={pantryId} setPantryId={setPantryId} exportKeys={exportKeys} importKeys={importKeys} initialTab={settingsStartTab} />   
       <DeleteModal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} onConfirm={executeDeleteFile} title={itemToDelete?.title} />
       <DeleteModal isOpen={!!speakerToDelete} onClose={() => setSpeakerToDelete(null)} onConfirm={confirmSpeakerDeletion} title={speakerToDelete ? getSpeakerName(speakerToDelete) || speakerToDelete : ""} />
@@ -735,7 +656,6 @@ export default function LastoWeb() {
       <InfoModal isOpen={infoModal.isOpen} title={infoModal.title} message={infoModal.message} onClose={() => setInfoModal({ ...infoModal, isOpen: false })} />
       <MergeModal isOpen={isMergeModalOpen} onClose={() => setIsMergeModalOpen(false)} onConfirm={executeMerge} speakers={getAllSpeakers()} getSpeakerName={getSpeakerName} />
       <AddSpeakerModal isOpen={isAddSpeakerModalOpen} onClose={() => setIsAddSpeakerModalOpen(false)} onConfirm={handleAddSpeaker} />
-      
       {contextMenu && contextMenu.visible && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} speakers={getAllSpeakers()} getSpeakerName={getSpeakerName} onInsert={(key) => insertSpeakerAtCursor(key)} onClose={() => setContextMenu(null)} onNewSpeaker={() => setIsAddSpeakerModalOpen(true)} onDragStart={startDrag} />
       )}
