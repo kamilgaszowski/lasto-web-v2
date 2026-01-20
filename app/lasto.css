@@ -9,20 +9,14 @@
 /* --- TŁO GŁÓWNE (Main Panel) --- */
 .lasto-main-panel {
   @apply flex-1 flex flex-col relative min-w-0 transition-all duration-300;
-  background-color: white; 
-}
-
-
-.lasto-main-panel {
-  @apply flex-1 flex flex-col relative min-w-0 transition-all duration-300;
-
-  background-color: #030712; 
+  background-color: #030712; /* gray-950 */
 }
 
 /* --- SIDEBAR --- */
 .lasto-sidebar {
   @apply fixed inset-y-0 left-0 z-30 flex flex-col transition-all duration-300;
-  @apply bg-gray-50/95 dark:bg-gray-900/95 border-r border-gray-100 dark:border-gray-800;
+  @apply border-r border-gray-800;
+  background-color: #030712; /* gray-950 */
 }
 
 .sidebar-open { @apply translate-x-0 w-full md:w-80; }
@@ -35,10 +29,10 @@
 .archive-list { @apply flex-1 flex flex-col overflow-y-auto px-4 space-y-1; }
 .archive-item { 
   @apply w-full text-left p-4 rounded-xl transition-all relative;
-  @apply hover:bg-gray-100 dark:hover:bg-gray-800/50;
+  @apply hover:bg-gray-800 text-gray-400 hover:text-white;
 }
 .archive-item-active { 
-  @apply bg-white dark:bg-gray-800 shadow-sm ring-1 ring-black/5 dark:ring-white/10; 
+  @apply bg-gray-800 text-white shadow-sm ring-1 ring-white/10; 
 }
 
 /* Przyciski w sidebarze */
@@ -46,17 +40,21 @@
 .btn-action-base { 
   @apply flex-1 py-2 px-3 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-all flex items-center justify-center space-x-2; 
 }
-.btn-pobierz { @apply bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100; }
-.btn-wyslij { @apply bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200; }
+.btn-pobierz { @apply bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40; }
+.btn-wyslij { @apply bg-gray-800 text-gray-400 hover:bg-gray-700; }
 
 /* Przycisk usuwania w liście */
 .archive-delete-btn {
-  @apply absolute top-2 right-2 p-2 z-10 transition-all text-gray-400 hover:text-red-500;
+  @apply absolute top-2 right-2 p-2 z-10 transition-all text-gray-500 hover:text-red-500;
   opacity: 0;
 }
 .archive-item:hover .archive-delete-btn { opacity: 1; }
+/* Na mobile przycisk usuwania zawsze widoczny, żeby łatwiej trafić */
+@media (max-width: 768px) {
+    .archive-delete-btn { opacity: 1; }
+}
 
-.sidebar-footer { @apply p-6 border-t border-gray-100 dark:border-gray-800 mt-auto bg-gray-50/50 dark:bg-gray-900/50; }
+.sidebar-footer { @apply p-6 border-t border-gray-800 mt-auto bg-gray-900/50; }
 
 /* --- TOP BAR --- */
 .top-bar {
@@ -64,10 +62,10 @@
   @apply p-4 md:p-8;
 }
 .top-bar-left { @apply flex items-center space-x-6; }
-.icon-button { @apply text-gray-300 hover:text-black dark:hover:text-white transition-colors cursor-pointer; }
-.settings-trigger { @apply text-gray-300 hover:text-black dark:hover:text-white transition-all duration-300; }
+.icon-button { @apply text-gray-400 hover:text-white transition-colors cursor-pointer; }
+.settings-trigger { @apply text-gray-400 hover:text-white transition-all duration-300; }
 .settings-trigger:hover { transform: rotate(12deg); }
-.btn-logo { @apply relative z-40 font-thin tracking-tighter transition-all duration-300 text-2xl md:text-3xl text-gray-400 hover:text-black dark:hover:text-white; }
+.btn-logo { @apply relative z-40 font-thin tracking-tighter transition-all duration-300 text-2xl md:text-3xl text-gray-400 hover:text-white; }
 
 /* --- WORKSPACE & HERO --- */
 .workspace-area { @apply flex-1 flex flex-col items-center justify-center px-4 md:px-12 pb-8 md:pb-12 overflow-hidden; }
@@ -78,55 +76,59 @@
 }
 .hero-title {
   @apply text-6xl md:text-9xl font-thin tracking-tighter transition-colors;
-  color: #111827;
+  color: white;
 }
-.dark .hero-title { color: white; }
 
-.hero-subtitle { @apply flex items-center justify-center space-x-6 text-xl font-light text-gray-400; }
-.rune-divider { @apply text-2xl text-gray-200 dark:text-gray-700 pb-1; }
+.hero-subtitle { @apply flex items-center justify-center space-x-6 text-xl font-light text-gray-500; }
+.rune-divider { @apply text-2xl text-gray-700 pb-1; }
 
 .import-zone { @apply flex flex-col space-y-4 items-center pt-8 min-h-[120px]; }
-.btn-primary { @apply bg-black dark:bg-white dark:text-black text-white px-10 py-5 rounded-full transition-all shadow-xl font-medium hover:scale-105; }
+.btn-primary { @apply bg-white text-black px-10 py-5 rounded-full transition-all shadow-xl font-medium hover:scale-105; }
 .btn-import { 
   @apply relative cursor-pointer px-12 py-5 rounded-full transition-all shadow-xl flex flex-col items-center justify-center border-2;
-  @apply bg-black dark:bg-white dark:text-black text-white border-transparent hover:scale-105 active:scale-95; 
+  @apply bg-white text-black border-transparent hover:scale-105 active:scale-95; 
 }
 .import-dragging { @apply bg-gray-800 text-white scale-110 border-white border-dashed; }
-.format-hint { @apply text-[10px] uppercase tracking-widest text-gray-300 dark:text-gray-600 mt-4; }
+.format-hint { @apply text-[10px] uppercase tracking-widest text-gray-600 mt-4; }
 
 /* --- EDITOR --- */
 .editor-container {
   @apply w-full max-w-5xl h-full flex flex-col space-y-6;
   animation: lasto-slide-up 0.5s ease-out;
 }
-.editor-header { @apply flex items-end justify-between border-b border-gray-50 dark:border-gray-800 pb-6 min-h-[80px]; }
+.editor-header { @apply flex items-end justify-between border-b border-gray-800 pb-6 min-h-[80px]; }
 
 .title-view-mode { @apply flex items-center w-full relative; }
+
+/* --- POPRAWKA: Tytuł na biało --- */
 .title-text { 
   @apply text-4xl font-thin tracking-tight truncate max-w-2xl;
-  color: black;
+  color: white; /* ZMIANA: Było black */
 }
-.dark .title-text { color: white; }
 
-.title-clickable { @apply flex items-center w-full cursor-pointer; }
+.title-clickable { @apply flex items-center w-full cursor-pointer hover:opacity-80 transition-opacity; }
 .edit-indicator { @apply ml-4 opacity-30 text-gray-400 transition-all duration-300; }
 .title-view-mode:hover .edit-indicator { opacity: 1; }
 
-.title-input { @apply w-full text-4xl font-thin tracking-tight bg-gray-50 dark:bg-gray-900 p-2 rounded outline-none dark:text-white focus:ring-1 focus:ring-black dark:focus:ring-white; }
-.speaker-names-grid { @apply flex space-x-4; }
-.speaker-field { @apply flex-1 bg-gray-100 dark:bg-gray-900 dark:text-white border-none rounded-lg p-3 text-xs focus:ring-1 focus:ring-black dark:focus:ring-white; }
-.transcript-editor { @apply flex-1 w-full p-8 bg-gray-100/40 dark:bg-gray-900/40 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-50 dark:selection:bg-blue-900; }
+/* --- POPRAWKA: Input edycji tytułu --- */
+.title-input { 
+  @apply w-full text-4xl font-thin tracking-tight bg-transparent p-2 rounded outline-none text-white border-b border-gray-700 focus:border-white transition-colors; 
+}
 
-.btn-save-cloud { @apply px-5 py-3 rounded-xl text-[10px] uppercase tracking-widest font-bold flex items-center space-x-2 transition-all bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100; }
-.btn-copy { @apply px-5 py-3 rounded-xl border transition-all text-[10px] uppercase tracking-widest font-medium flex items-center space-x-2 border-gray-200 dark:border-gray-800 text-gray-400 hover:text-black dark:hover:text-white hover:bg-gray-50; }
-.btn-status-success { @apply !bg-black dark:!bg-white !text-white dark:!text-black !border-transparent; }
+.speaker-names-grid { @apply flex space-x-4; }
+.speaker-field { @apply flex-1 bg-gray-900 text-white border-none rounded-lg p-3 text-xs focus:ring-1 focus:ring-white; }
+.transcript-editor { @apply flex-1 w-full p-8 bg-gray-900/40 text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none selection:bg-blue-900; }
+
+.btn-save-cloud { @apply px-5 py-3 rounded-xl text-[10px] uppercase tracking-widest font-bold flex items-center space-x-2 transition-all bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40; }
+.btn-copy { @apply px-5 py-3 rounded-xl border transition-all text-[10px] uppercase tracking-widest font-medium flex items-center space-x-2 border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800; }
+.btn-status-success { @apply !bg-white !text-black !border-transparent; }
 
 .loader-spin-xs {
   @apply w-3 h-3 border-2 border-current border-t-transparent rounded-full;
   animation: spin 0.8s linear infinite;
 }
 .loader-spin {
-  @apply w-6 h-6 border-2 border-t-black dark:border-t-white rounded-full;
+  @apply w-6 h-6 border-2 border-t-white rounded-full;
   animation: spin 1s linear infinite;
 }
 .loader-text { @apply text-[10px] uppercase tracking-widest text-gray-400; }
@@ -135,52 +137,42 @@
 .main-footer { @apply absolute bottom-6 right-8 flex items-center space-x-4 pointer-events-none select-none z-0; }
 .auto-save-indicator { @apply flex items-center space-x-1.5 opacity-40; }
 .status-dot { @apply w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse; }
-.footer-signature { @apply text-[10px] text-gray-200 dark:text-gray-800 uppercase tracking-widest flex items-center space-x-3; }
+.footer-signature { @apply text-[10px] text-gray-600 uppercase tracking-widest flex items-center space-x-3; }
 
 /* --- MODALS (Settings, Delete, Info) --- */
 .modal-backdrop {
-  @apply fixed inset-0 z-50 flex items-center justify-center p-0 md:p-6 outline-none; /* ZMIANA: p-0 na mobile */
-  @apply bg-black/60 backdrop-blur-md;
+  @apply fixed inset-0 z-50 flex items-center justify-center p-0 md:p-6 outline-none; 
+  @apply bg-black/80 backdrop-blur-md;
   animation: lasto-fade-in 0.2s ease-out;
 }
 
 /* Modal Ustawień - RWD */
 .settings-modal {
-  /* BAZA (MOBILE): Flex pionowy, pełna wysokość, brak zaokrągleń */
   @apply flex flex-col w-full h-[100dvh] md:h-auto md:max-h-[90vh] max-w-5xl relative overflow-hidden;
   @apply bg-[#111827] text-white shadow-2xl;
-  
-  /* DESKTOP (md): Flex poziomy, zaokrąglenia, border */
   @apply md:flex-row md:rounded-[2.5rem] md:border md:border-gray-800;
-  
   animation: lasto-scale-in 0.3s ease-out;
 }
 
-/* Przycisk zamknij */
 .settings-close-btn {
   @apply absolute top-4 right-4 md:top-6 md:right-8 z-20;
-  @apply p-2 rounded-full bg-gray-800/50 md:bg-transparent; /* Tło pod iksem na mobile dla czytelności */
+  @apply p-2 rounded-full bg-gray-800/50 md:bg-transparent;
   @apply text-gray-400 hover:text-white transition-colors;
 }
 
-/* Lewy panel (Przewodnik) */
 .guide-panel {
-  /* MOBILE: Pełna wysokość (bo będzie jedynym widocznym elementem w zakładce) */
   @apply w-full md:w-1/2 p-6 md:p-12;
   @apply bg-gray-900/30;
   @apply border-b md:border-b-0 md:border-r border-gray-800;
   @apply overflow-y-auto;
-
 }
 
-/* Na desktopie zdejmujemy limit wysokości z guide panel */
 @media (min-width: 768px) {
   .guide-panel { max-height: none; }
 }
 
 .guide-heading { @apply text-2xl md:text-3xl font-light tracking-tight mb-6 md:mb-10 text-white; }
 
-/* Kroki w poradniku */
 .step-container { @apply space-y-3; }
 .step-header { @apply flex items-center space-x-3 text-indigo-400; }
 .step-number { @apply flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-full border-2 border-current text-xs md:text-sm font-bold; }
@@ -189,16 +181,13 @@
 .step-link { @apply underline text-indigo-400 hover:text-indigo-300; }
 .highlight-text { @apply text-white font-medium; }
 
-/* Prawy panel (Formularz) */
 .form-panel {
-
   @apply w-full md:w-1/2 p-6 md:p-12 space-y-8 md:space-y-12;
   @apply overflow-y-auto;
 }
 .settings-heading { @apply text-2xl md:text-3xl font-thin text-center text-white; }
 .settings-label { @apply text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] px-1 block mb-2; }
 
-/* Inputy */
 .input-group { @apply space-y-2; }
 .input-label { @apply text-[10px] md:text-[11px] font-semibold text-gray-500 uppercase ml-1; }
 .settings-input { 
@@ -207,7 +196,6 @@
   @apply focus:ring-1 focus:ring-white focus:border-white transition-all outline-none; 
 }
 
-/* Sekcja Backup */
 .backup-section { @apply space-y-6 pt-4 border-t border-gray-800; }
 .backup-grid { @apply grid grid-cols-2 gap-3 md:gap-4; }
 .btn-backup { 
@@ -221,15 +209,15 @@
   @apply font-bold text-sm shadow-xl active:scale-[0.98] transition-transform; 
 }
 
-/* --- POZOSTAŁE MODALE (Bez zmian logicznych, tylko kolor) --- */
+/* --- POZOSTAŁE MODALE --- */
 .modal-backdrop-high {
   @apply fixed inset-0 z-[60] flex items-center justify-center p-6 outline-none;
-  @apply bg-black/60 backdrop-blur-md;
+  @apply bg-black/80 backdrop-blur-md;
   animation: lasto-fade-in 0.2s ease-out;
 }
 .modal-backdrop-light {
   @apply fixed inset-0 z-50 flex items-center justify-center p-6 outline-none;
-  @apply bg-white/10 backdrop-blur-md; /* ZMIANA: Ciemniejszy backdrop dla info */
+  @apply bg-black/60 backdrop-blur-md; 
   animation: lasto-fade-in 0.2s ease-out;
 }
 
@@ -250,133 +238,90 @@
 .modal-desc { @apply text-sm text-gray-400; }
 
 .modal-actions-row { @apply flex space-x-3 pt-2; }
-.modal-actions-col { @apply flex flex-col space-y-2 pt-4; }
-
 .btn-modal-cancel { @apply flex-1 px-4 py-3 rounded-xl bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-sm font-medium; }
 .btn-modal-delete { @apply flex-1 px-4 py-3 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors text-sm font-medium shadow-lg shadow-red-600/20; }
-.btn-modal-delete-all { @apply w-full py-4 rounded-xl bg-red-600 text-white font-bold shadow-lg shadow-red-600/20 hover:bg-red-700 transition-colors text-sm; }
-.btn-modal-cancel-text { @apply w-full py-3 rounded-xl bg-transparent text-gray-500 hover:text-gray-300 text-xs font-medium; }
 .btn-modal-ok { @apply w-full px-4 py-3 rounded-xl bg-white text-black hover:bg-gray-200 transition-colors text-sm font-medium; }
 
-/* --- ROZMÓWCY (Nowy Wygląd) --- */
+/* --- ROZMÓWCY --- */
 .speaker-list {
   @apply flex flex-wrap gap-2 mb-3 items-center;
 }
 
-/* Kontener pojedynczego rozmówcy */
 .speaker-badge {
   @apply flex items-center bg-gray-900 border border-gray-800 rounded-lg overflow-hidden transition-all shadow-sm;
   @apply focus-within:ring-1 focus-within:ring-white focus-within:border-white;
 }
 
-/* Pole tekstowe (Teraz jest głównym elementem) */
 .speaker-input {
-  @apply bg-transparent text-white font-medium text-xs px-3 py-2 w-24 md:w-32 focus:ring-0 outline-none placeholder-gray-600;
+  @apply bg-transparent text-white font-medium px-3 py-2 w-24 md:w-32 focus:ring-0 outline-none placeholder-gray-600;
   @apply border-none; 
+  @apply text-base md:text-xs; 
 }
 
-/* Wspólna klasa dla przycisków akcji (+ i x) */
 .speaker-action-btn {
   @apply p-2 flex items-center justify-center transition-colors cursor-pointer h-full;
 }
 
-/* Przycisk Wstawiania (+) - TERAZ SZARY I Z LEWEJ */
 .btn-insert {
   @apply text-gray-500 hover:text-white hover:bg-gray-800;
   @apply font-bold text-sm leading-none border-r border-gray-800; 
 }
 
-/* Przycisk Usuwania (X) */
 .btn-delete {
   @apply text-gray-500 hover:text-red-500 hover:bg-red-900/20 border-l border-gray-800; 
 }
 
-/* Przycisk Dodawania Nowego (Na końcu listy) */
 .btn-add-speaker {
   @apply flex items-center px-3 py-2 rounded-lg border border-dashed border-gray-700 text-gray-500 text-xs font-medium hover:border-gray-500 hover:text-white transition-all bg-transparent;
 }
-/* --- CONTEXT MENU (Floating Window) --- */
+
+/* --- CONTEXT MENU --- */
 .context-menu {
   @apply fixed z-50 bg-[#111827] border border-gray-700 rounded-xl shadow-2xl w-64; 
-  /* Usunięto overflow-hidden z głównego kontenera, żeby X mógł "oddychać" */
   animation: lasto-scale-in 0.1s ease-out;
 }
 
-/* Pasek do przeciągania (Header) */
 .context-menu-handle {
   @apply bg-gray-800 border-b border-gray-700 px-4 py-3 cursor-grab active:cursor-grabbing;
-  @apply flex items-center justify-between select-none rounded-t-xl; /* Zaokrąglenie góry */
+  @apply flex items-center justify-between select-none rounded-t-xl;
 }
 
-.context-menu-title {
-  @apply text-xs uppercase font-bold text-white tracking-widest;
-}
-
-.context-menu-close {
-  @apply text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg p-1 transition-all cursor-pointer;
-  @apply flex items-center justify-center;
-}
-
-/* Treść menu */
-.context-menu-content {
-  @apply max-h-[300px] overflow-y-auto rounded-b-xl; /* Zaokrąglenie dołu */
-}
-
+.context-menu-title { @apply text-xs uppercase font-bold text-white tracking-widest; }
+.context-menu-close { @apply text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg p-1 transition-all cursor-pointer flex items-center justify-center; }
+.context-menu-content { @apply max-h-[300px] overflow-y-auto rounded-b-xl; }
 .context-menu-item {
   @apply block w-full text-left px-4 py-3 text-sm text-gray-300 font-medium hover:bg-gray-800 hover:text-white transition-colors cursor-pointer;
   @apply border-b border-gray-800/50 last:border-0;
 }
-/* --- FIX PRZYBLIŻANIA NA IPHONE (Ważne!) --- */
+
+/* --- FIX PRZYBLIŻANIA NA IPHONE --- */
 @media screen and (max-width: 768px) {
   input, textarea, select {
-    font-size: 16px !important; /* Zapobiega auto-zoomowi */
+    font-size: 16px !important;
   }
 }
 
-/* --- ROZMÓWCY (Ulepszona wersja Mobile) --- */
-.speaker-list {
-  @apply flex gap-2 mb-0 items-center; /* Zmieniono mb-3 na mb-0 */
-  /* Na desktopie zawijamy (tak jak było) */
-  @apply flex-wrap; 
-}
-
-/* Specyficzne style tylko dla MOBILE */
+/* --- ROZMÓWCY NA MOBILE --- */
 @media (max-width: 768px) {
   .speaker-list {
-    /* Lista staje się paskiem przewijanym poziomo */
     flex-wrap: nowrap;
     overflow-x: auto;
-    
-    /* Przyklejenie do góry */
     position: sticky;
     top: 0;
     z-index: 20;
-    
-    /* Tło i padding, żeby tekst nie prześwitywał pod spodem */
-    background-color: #030712; /* Bardzo ciemny (gray-950) */
+    background-color: #030712;
     padding: 10px 0;
     border-bottom: 1px solid #1f2937;
-    
-    /* Ukrycie paska przewijania (estetyka) */
+    margin-bottom: 0;
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
   
-  .speaker-list::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* Zmniejszamy trochę same kafelki na mobile, żeby więcej weszło */
-  .speaker-badge {
-    flex-shrink: 0; /* Nie ściskaj kafelków */
-  }
-  
-  .speaker-input {
-    width: 80px; /* Nieco węższe inputy na mobile */
-  }
+  .speaker-list::-webkit-scrollbar { display: none; }
+  .speaker-badge { flex-shrink: 0; }
 }
 
-/* --- ANIMACJE (Native) --- */
+/* --- ANIMACJE --- */
 @keyframes lasto-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lasto-scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 @keyframes lasto-fade-in-zoom { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }

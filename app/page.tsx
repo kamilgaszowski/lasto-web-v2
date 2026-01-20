@@ -9,7 +9,7 @@ import { DeleteModal, InfoModal, AddSpeakerModal, MergeModal } from '../componen
 import { SettingsModal } from '../components/SettingsModal';
 import { ContextMenu } from '../components/ContextMenu';
 
-// Importy Typów i Logiki (z nowych plików)
+// Importy Typów i Logiki
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete, compressHistory, decompressHistory } from '../lib/storage';
 
@@ -99,24 +99,35 @@ export default function LastoWeb() {
   // --- LOGIC: CLOUD SYNC (AUTO) ---
   
   // 1. Zapis w tle (Triggerowany zmianami)
+ // 1. Zapis w tle (Triggerowany zmianami)
   const triggerAutoSave = async () => {
-    if (!pantryId) return;
+    // Zabezpieczenie: Sprawdzamy czy ID istnieje i nie jest puste
+    const cleanId = pantryId?.trim();
+    if (!cleanId) return;
+
     try {
         const compressed = compressHistory(history);
         const CHUNK_SIZE = 50;
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-            await fetch(`https://getpantry.cloud/apiv1/pantry/${pantryId.trim()}/basket/lastoHistory`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+            const response = await fetch(`https://getpantry.cloud/apiv1/pantry/${cleanId}/basket/lastoHistory`, {
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
                     manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
                 })
             });
+            
+            if (!response.ok) {
+                console.warn(`Auto-save warning: Server responded with ${response.status}`);
+            }
         }
         console.log("Auto-save completed");
-    } catch (e) { console.error("Auto-save failed:", e); }
+    } catch (e) { 
+        // Łapiemy błąd sieci (np. brak internetu), żeby nie wywalało całej aplikacji
+        console.warn("Auto-save skipped (Network error or invalid ID):", e); 
+    }
   };
-
   // 2. Zapis natychmiastowy (Dla nowych plików z AI)
   const saveToCloudImmediately = async (dataToSave: HistoryItem[]) => {
     if (!pantryId) return;
@@ -203,7 +214,6 @@ export default function LastoWeb() {
       }
     };
     reader.readAsText(file);
-    // Reset inputa, żeby można było wgrać ten sam plik ponownie w razie potrzeby
     event.target.value = '';
   };
 
@@ -238,7 +248,7 @@ export default function LastoWeb() {
              const exists = prev.some(item => item.id === uniqueId || item.id.startsWith(id));
              if (exists) return prev; 
              const updated = [newItem, ...prev];
-             saveToCloudImmediately(updated); // Wysyłka od razu po sukcesie
+             saveToCloudImmediately(updated);
              return updated;
           });
 
@@ -300,6 +310,21 @@ export default function LastoWeb() {
       await dbSave(updatedItem);
   };
 
+  const saveNewTitle = async () => {
+    // Jeśli brak tytułu lub pusty, po prostu wychodzimy z trybu edycji
+    if (!selectedItem || !editedTitle.trim()) { 
+      setIsEditingTitle(false); 
+      return; 
+    }
+    
+    // Tworzymy zaktualizowany obiekt i zapisujemy go
+    const updatedItem = { ...selectedItem, title: editedTitle };
+    await updateAndSave(updatedItem);
+    
+    // Zamykamy tryb edycji
+    setIsEditingTitle(false);
+  };
+
   const handleSpeakerNameChange = async (speakerKey: string, newName: string) => {
     if (!selectedItem) return;
     const updatedItem = {
@@ -320,6 +345,10 @@ export default function LastoWeb() {
     if (!newKey) newKey = `S${currentKeys.length + 1}`;
     handleSpeakerNameChange(newKey, name || newKey);
     setIsAddSpeakerModalOpen(false);
+  };
+
+  const handleDeleteSpeakerClick = (speakerKey: string) => {
+    setSpeakerToDelete(speakerKey);
   };
 
   const executeMerge = async (source: string, target: string) => {
@@ -361,7 +390,7 @@ export default function LastoWeb() {
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
         setIsDeleteModalOpen(false);
         setItemToDelete(null);
-        triggerAutoSave(); // Sync po usunięciu
+        triggerAutoSave(); 
     } catch (e) { console.error(e); } 
     finally { setIsProcessing(false); }
   };
@@ -379,7 +408,7 @@ export default function LastoWeb() {
     setHistory([]);
     setSelectedItem(null);
     setIsDeleteAllModalOpen(false);
-    triggerAutoSave(); // Sync pustej listy
+    triggerAutoSave();
     setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wszystkie nagrania usunięte.' });
   };
 
@@ -483,7 +512,7 @@ export default function LastoWeb() {
               ) : !apiKey ? (
                   <button 
                     onClick={() => { 
-                      setSettingsStartTab('guide'); // <-- Otwórz na Przewodniku
+                      setSettingsStartTab('guide'); 
                       setIsSettingsOpen(true); 
                     }} 
                     className="btn-primary"
@@ -492,49 +521,121 @@ export default function LastoWeb() {
                   </button>
                 ) : (
                   <>
-                    <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
-                      {isDragging ? 'Upuść tutaj!' : 'Importuj nagranie'}
-                      <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
-                    </label>
+                    <label 
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} 
+                    onDragLeave={() => setIsDragging(false)} 
+                    onDrop={handleDrop} 
+                    className={`btn-import ${isDragging ? 'import-dragging' : ''}`}
+                  >
+                    {isDragging ? 'Upuść tutaj!' : 'Importuj nagranie'}
+                   <input 
+                        type="file" 
+                        className="hidden" 
+                        accept="audio/*" 
+                        capture="user" 
+                        onChange={handleFileInput} 
+                    />
+                  </label>
+                  <p className="format-hint mt-2 text-[10px] text-gray-500">
+                    iOS: Nagraj w Dyktafonie i wybierz plik.
+                  </p>
                   </>
                 )}
               </div>
             </div>
           ) : (
             <div className="editor-container">
+              {/* HEADER Z TYTUŁEM (NAPRAWIONY) */}
               <div className="editor-header">
                 {isEditingTitle ? (
                   <div className="title-view-mode">
-                    <input className="title-input" value={editedTitle} onChange={(e) => setEditedTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setIsEditingTitle(false)} autoFocus />
-                    <button onClick={() => setIsEditingTitle(false)} className="ml-4 text-green-600 p-2"><CheckIcon /></button>
+                    {/* TRYB EDYCJI: Input do wpisywania */}
+                    <input 
+                        className="title-input" 
+                        value={editedTitle} 
+                        onChange={(e) => setEditedTitle(e.target.value)} 
+                        onKeyDown={(e) => e.key === 'Enter' && saveNewTitle()} // <--- TERAZ ZAPISUJE
+                        autoFocus 
+                    />
+                    <button onClick={saveNewTitle} className="ml-4 text-green-600 p-2">
+                        <CheckIcon />
+                    </button>
                   </div>
                 ) : (
                   <div className="title-view-mode">
-                    <button onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} className="mr-4 text-gray-400 hover:text-red-500 p-2"><TrashIcon /></button>
-                    <div className="title-clickable" onClick={() => { setEditedTitle(selectedItem.title); setIsEditingTitle(true); }}>
-                      <h1 className="title-text">{selectedItem.title}</h1>
+                    {/* TRYB PODGLĄDU: Tytuł i ikony */}
+                    <button 
+                        onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} 
+                        className="mr-4 text-gray-400 hover:text-red-500 p-2"
+                        title="Usuń nagranie"
+                    >
+                        <TrashIcon />
+                    </button>
+                    
+                    <div 
+                        className="title-clickable" 
+                        onClick={() => { 
+                            setEditedTitle(selectedItem.title || ""); 
+                            setIsEditingTitle(true); 
+                        }}
+                    >
+                      {/* Tutaj wyświetlamy tytuł. Dodałem "Bez tytułu" jako fallback */}
+                      <h1 className="title-text">{selectedItem.title || "Bez tytułu"}</h1>
                       <span className="edit-indicator"><EditIcon /></span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* LISTA ROZMÓWCÓW */}
-              <div className="speaker-list">
-                {getAllSpeakers().map((key) => (
-                  <div key={key} className="speaker-badge">
-                    <button onClick={() => insertSpeakerAtCursor(key)} className="speaker-action-btn btn-insert" title="Wstaw">+</button>
-                    <input className="speaker-input" value={getSpeakerName(key) || key} onChange={(e) => handleSpeakerNameChange(key, e.target.value)} placeholder="Nazwa..." />
-                    <button onClick={() => setSpeakerToDelete(key)} className="speaker-action-btn btn-delete"><CloseIcon /></button>
-                  </div>
-                ))}
-                <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">Nowy</button>
-                {getAllSpeakers().length > 1 && <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker">Scal rozmówców</button>}
-              </div>
+            <div className="speaker-list">
+              {getAllSpeakers().map((speakerKey) => {
+                const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined 
+                  ? selectedItem.speakerNames[speakerKey] 
+                  : speakerKey;
 
-              {/* EDITOR */}
+                return (
+                  <div key={speakerKey} className="speaker-badge">
+                    <button 
+                      onMouseDown={(e) => {
+                        e.preventDefault(); 
+                        insertSpeakerAtCursor(speakerKey);
+                      }}
+                      className="speaker-action-btn btn-insert"
+                      title="Wstaw do tekstu"
+                    >
+                      +
+                    </button>
+                    <input 
+                      className="speaker-input" 
+                      value={displayValue} 
+                      onChange={(e) => handleSpeakerNameChange(speakerKey, e.target.value)} 
+                      placeholder="Nazwa..." 
+                    />
+                    
+                    <button 
+                      onClick={() => handleDeleteSpeakerClick(speakerKey)} 
+                      className="speaker-action-btn btn-delete"
+                      title="Usuń rozmówcę"
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                );
+              })}
+              
+             <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">
+                Nowy
+              </button>
+              
+              {getAllSpeakers().length > 1 && (
+                 <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">
+                   Scal rozmówców
+                 </button>
+              )}
+            </div>
+
               <div className="relative flex-1 w-full min-h-0">
-                <textarea ref={textareaRef} className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
+                <textarea ref={textareaRef} className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
                   value={getDisplayText(selectedItem)} onChange={(e) => handleTextChange(e.target.value)} onContextMenu={handleContextMenu} />
                 <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} 
                   className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
@@ -545,15 +646,13 @@ export default function LastoWeb() {
         </div>
       </div>
 
-      {/* MODALE */}
-<SettingsModal 
+      <SettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
         apiKey={apiKey} 
         setApiKey={setApiKey} 
         pantryId={pantryId} 
         setPantryId={setPantryId} 
-        // TUTAJ BYŁY PUSTE FUNKCJE - TERAZ SĄ PODPIĘTE:
         exportKeys={exportKeys} 
         importKeys={importKeys} 
         initialTab={settingsStartTab}
