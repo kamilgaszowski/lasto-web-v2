@@ -13,7 +13,6 @@ import { ContextMenu } from '../components/ContextMenu';
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete, compressHistory, decompressHistory } from '../lib/storage';
 
-
 export default function LastoWeb() {
   // --- STATE ---
   const [apiKey, setApiKey] = useState('');
@@ -53,26 +52,49 @@ export default function LastoWeb() {
 
   const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
 
-  // --- INIT ---
+  // --- INIT & AUTO-SYNC NA STARCIE ---
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
-    setPantryId(localStorage.getItem('pantryId') || '');
+    const savedPantryId = localStorage.getItem('pantryId') || '';
+    setPantryId(savedPantryId);
+
     const initData = async () => {
         try {
+            // 1. Najpierw ładujemy to co mamy lokalnie (natychmiast)
             const items = await dbGetAll();
             const sorted = items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             setHistory(sorted);
+            
+            // 2. Jeśli mamy ID, próbujemy odświeżyć z chmury (Sync przy F5)
+            if (savedPantryId) {
+                // isSilent = true, żeby nie atakować modalem "Sukces" przy każdym wejściu na stronę
+                // Ale to pobierze nowe dane i zaktualizuje widok
+                loadFromCloud(true);
+            }
         } catch (e) { console.error("Błąd bazy danych:", e); }
     };
     initData();
-  }, []);
+  }, []); 
+
+  // --- PERIODYCZNE POBIERANIE (POLLING - Zwiększono czas) ---
+  useEffect(() => {
+    if (!pantryId) return;
+
+    // Zwiększamy interwał do 60 sekund, żeby unikać błędu 429
+    const interval = setInterval(() => {
+        if (!isEditingTitle) {
+            loadFromCloud(true);
+        }
+    }, 60000); 
+
+    return () => clearInterval(interval);
+  }, [pantryId, isEditingTitle]);
 
   // --- ZAMYKANIE CONTEXT MENU KLIKNIĘCIEM POZA ---
   useEffect(() => {
     const handleClickOutside = () => {
       if (contextMenu) setContextMenu(null);
     };
-    // Nasłuchujemy kliknięć w całym oknie
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu]);
@@ -92,14 +114,12 @@ export default function LastoWeb() {
 
   const getDisplayText = (item: HistoryItem) => {
     if (!item.utterances || item.utterances.length === 0) return item.content;
-    
     const isJunk = (text: string, index: number) => {
         const badWords = ["prosimy", "poczekać", "połączenie", "kontynuować", "wkrótce", "rozmowę"];
         const lowerText = text.toLowerCase();
         if (index < 2) return badWords.some(word => lowerText.includes(word));
         return false;
     };
-
     return item.utterances.filter((u, index) => !isJunk(u.text, index)).map(u => {
         const speakerKey = (u.speaker === 'A' || u.speaker === '1') ? 'A' : 'B'; 
         const name = item.speakerNames?.[speakerKey] || item.speakerNames?.[u.speaker] || u.speaker;
@@ -107,36 +127,35 @@ export default function LastoWeb() {
     }).join('\n');
   };
 
-  // --- LOGIC: CLOUD SYNC (AUTO) ---
+  // --- LOGIC: CLOUD SYNC (PROXY) ---
   
-  // ZMODYFIKOWANY triggerAutoSave:
-  // Przyjmuje opcjonalnie `overrideHistory`. Jeśli podane, używa tych danych zamiast stanu (ważne przy szybkich zmianach).
   const triggerAutoSave = async (overrideHistory?: HistoryItem[]) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
 
-    // Użyj przekazanych danych lub aktualnego stanu
     const dataToSave = overrideHistory || history;
 
     try {
         const compressed = compressHistory(dataToSave);
         const CHUNK_SIZE = 50;
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-            const response = await fetch(`https://getpantry.cloud/apiv1/pantry/${cleanId}/basket/lastoHistory`, {
+            const response = await fetch('/api/pantry', {
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
-                    manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                    id: cleanId,
+                    data: {
+                        [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
+                        manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                    }
                 })
             });
-            if (!response.ok) {
-                console.warn(`Auto-save warning: Server responded with ${response.status}`);
-            }
+            // Ignorujemy 429 przy auto-save (po prostu nie zapisze tym razem, spróbuje później)
+            if (!response.ok && response.status !== 429) console.warn(`Auto-save warning: ${response.status}`);
         }
         console.log("Auto-save completed");
     } catch (e) { 
-        console.warn("Auto-save skipped (Network error or invalid ID):", e); 
+        console.warn("Auto-save skipped:", e); 
     }
   };
 
@@ -147,32 +166,55 @@ export default function LastoWeb() {
         const compressed = compressHistory(dataToSave);
         const CHUNK_SIZE = 50;
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-            await fetch(`https://getpantry.cloud/apiv1/pantry/${cleanId}/basket/lastoHistory`, {
+            await fetch('/api/pantry', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
-                    manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                    id: cleanId,
+                    data: {
+                        [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
+                        manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                    }
                 })
             });
         }
     } catch (e) { console.error("Cloud upload failed", e); }
   };
 
-  const loadFromCloud = async () => {
-    if (!pantryId) {
-        setInfoModal({ isOpen: true, title: 'Brak ID', message: 'Wpisz Pantry ID w ustawieniach.' });
+  // --- FUNKCJA POBIERANIA (Z OBSŁUGĄ BŁĘDU 429) ---
+  const loadFromCloud = async (isSilent = false) => {
+    const cleanId = pantryId?.trim();
+    if (!cleanId) {
+        if (!isSilent) setInfoModal({ isOpen: true, title: 'Brak ID', message: 'Wpisz Pantry ID w ustawieniach.' });
         return;
     }
     
-    setIsProcessing(true);
+    if (!isSilent) setIsProcessing(true);
+    
     try {
-        const res = await fetch(`https://getpantry.cloud/apiv1/pantry/${pantryId.trim()}/basket/lastoHistory?t=${Date.now()}`, { 
+        const res = await fetch(`/api/pantry?id=${cleanId}`, { 
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
         
-        if (!res.ok) throw new Error(`Błąd połączenia: ${res.status}`);
+        // --- OBSŁUGA BŁĘDU 429 (ZA DUŻO ZAPYTAŃ) ---
+        if (res.status === 429) {
+            console.warn("Przekroczono limit zapytań (429). Czekam...");
+            if (!isSilent) {
+                setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Za dużo prób synchronizacji. Odczekaj minutę.' });
+            }
+            // Nie rzucamy błędu, po prostu przerywamy cicho
+            setIsProcessing(false);
+            return; 
+        }
+
+        if (res.status === 404) {
+             if (!isSilent) setInfoModal({ isOpen: true, title: 'Info', message: 'Chmura jest pusta. Zapisz coś najpierw.' });
+             setIsProcessing(false);
+             return;
+        }
+
+        if (!res.ok) throw new Error(`Błąd: ${res.status}`);
         
         const data = await res.json();
         let remoteCompressed: any[] = [];
@@ -182,43 +224,67 @@ export default function LastoWeb() {
                 if (data[`chunk_${i}`]) remoteCompressed = [...remoteCompressed, ...data[`chunk_${i}`]];
             }
         }
-        else if (Array.isArray(data)) {
-            remoteCompressed = data;
-        }
-        else if (data.history && Array.isArray(data.history)) {
-             remoteCompressed = data.history;
-        }
+        else if (Array.isArray(data)) { remoteCompressed = data; }
+        else if (data.history && Array.isArray(data.history)) { remoteCompressed = data.history; }
 
         if (remoteCompressed.length > 0) {
              const remoteHistory = decompressHistory(remoteCompressed);
              
              setHistory(prev => {
-                const newItems = remoteHistory.filter(r => !prev.some(l => l.id === r.id));
-                
-                if (newItems.length > 0) {
-                    setInfoModal({ isOpen: true, title: 'Sukces', message: `Pobrano ${newItems.length} nowych nagrań.` });
-                    newItems.forEach(async (item) => await dbSave(item));
-                } else {
-                    setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Wszystkie nagrania masz już na urządzeniu.' });
+                const localMap = new Map(prev.map(item => [item.id, item]));
+                let updatesCount = 0;
+                let newCount = 0;
+
+                remoteHistory.forEach(remoteItem => {
+                    const localItem = localMap.get(remoteItem.id);
+
+                    if (!localItem) {
+                        localMap.set(remoteItem.id, remoteItem);
+                        newCount++;
+                        dbSave(remoteItem);
+                    } else {
+                        const remoteDate = new Date(remoteItem.date).getTime();
+                        const localDate = new Date(localItem.date).getTime();
+
+                        // Sync: Jeśli w chmurze nowszy
+                        if (remoteDate > localDate + 1000) {
+                            localMap.set(remoteItem.id, remoteItem);
+                            updatesCount++;
+                            dbSave(remoteItem);
+                            if (selectedItem?.id === remoteItem.id) setSelectedItem(remoteItem);
+                        }
+                    }
+                });
+
+                if (!isSilent && (newCount > 0 || updatesCount > 0)) {
+                    setInfoModal({ 
+                        isOpen: true, 
+                        title: 'Synchronizacja', 
+                        message: `Pobrano: ${newCount}, Zaktualizowano: ${updatesCount}` 
+                    });
+                } else if (!isSilent) {
+                    setInfoModal({ isOpen: true, title: 'Aktualne', message: 'Wszystkie nagrania są aktualne.' });
                 }
                 
-                setPobierzState(true);
-                setTimeout(() => setPobierzState(false), 2000);
+                if (newCount > 0 || updatesCount > 0) {
+                     setPobierzState(true);
+                     setTimeout(() => setPobierzState(false), 2000);
+                }
 
-                return [...newItems, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                return Array.from(localMap.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             });
             setIsSettingsOpen(false);
         } else {
-            throw new Error("Kosz w chmurze jest pusty lub ma nieznany format.");
+            if (!isSilent) setInfoModal({ isOpen: true, title: 'Pusto', message: 'W chmurze nie ma danych.' });
         }
     } catch (e: any) { 
         console.error(e);
-        setInfoModal({ isOpen: true, title: 'Błąd', message: e.message }); 
+        if (!isSilent) setInfoModal({ isOpen: true, title: 'Błąd', message: e.message }); 
     }
     finally { setIsProcessing(false); }
   };
 
-  // --- KEYS MANAGEMENT (EXPORT / IMPORT) ---
+  // --- KEYS MANAGEMENT ---
   const exportKeys = () => {
     const keys = { assemblyAIKey: apiKey, pantryId: pantryId };
     const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
@@ -245,8 +311,9 @@ export default function LastoWeb() {
           if (imported.pantryId) { 
             setPantryId(imported.pantryId); 
             localStorage.setItem('pantryId', imported.pantryId); 
+            setTimeout(() => loadFromCloud(false), 500);
           }
-          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zostały zaimportowane.' });
+          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane. Trwa pobieranie...' });
         } else {
             throw new Error("Brak kluczy w pliku");
         }
@@ -258,8 +325,7 @@ export default function LastoWeb() {
     event.target.value = '';
   };
 
-  // --- LOGIC: UPLOAD & AI (ASSEMBLY AI) ---
-
+  // --- LOGIC: UPLOAD & AI ---
   const checkStatus = async (id: string, fileName: string) => {
     const interval = setInterval(async () => {
       try {
@@ -337,7 +403,7 @@ export default function LastoWeb() {
     if (file && apiKey) processFile(file);
   };
 
-  // --- GLOBAL PASTE HANDLER (Ctrl+V) ---
+  // --- PASTE HANDLER ---
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       if (isSettingsOpen || selectedItem) return;
@@ -355,41 +421,32 @@ export default function LastoWeb() {
     return () => window.removeEventListener('paste', handlePaste);
   }, [isSettingsOpen, selectedItem, apiKey]);
 
-  // --- LOGIC: ACTIONS (TEXT, SPEAKERS) ---
-
+  // --- ACTIONS ---
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
     const updatedItem = { ...selectedItem, content: newText, utterances: [] };
-    // Zapisujemy tylko lokalnie (DB + State)
-    updateAndSave(updatedItem); 
-  };
-
-  // Ta funkcja tylko aktualizuje stan i bazę lokalną
-  const updateAndSave = async (updatedItem: HistoryItem) => {
-      setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-      setSelectedItem(updatedItem);
-      await dbSave(updatedItem);
-  };
-
-  // NOWA FUNKCJA ZAPISU TYTUŁU (Auto-Save przy Enter/Blur)
-  const saveNewTitle = async () => {
-    if (!selectedItem) { setIsEditingTitle(false); return; }
-    
-    // Jeśli tytuł pusty, zostaw stary lub pusty
-    const finalTitle = editedTitle.trim() || selectedItem.title; 
-
-    const updatedItem = { ...selectedItem, title: finalTitle };
-    
-    // 1. Zapisz lokalnie
-    setHistory(prev => {
-        const newHistory = prev.map(item => item.id === updatedItem.id ? updatedItem : item);
-        // 2. Wyzwól zapis do chmury używając NOWEJ historii
-        triggerAutoSave(newHistory); 
-        return newHistory;
-    });
+    setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
     setSelectedItem(updatedItem);
     await dbSave(updatedItem);
+  };
 
+  const updateAndSave = async (updatedItem: HistoryItem) => {
+      const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
+      setHistory(prev => {
+          const newHistory = prev.map(item => item.id === itemWithNewDate.id ? itemWithNewDate : item);
+          const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          triggerAutoSave(sorted); 
+          return sorted;
+      });
+      setSelectedItem(itemWithNewDate);
+      await dbSave(itemWithNewDate);
+  };
+
+  const saveNewTitle = async () => {
+    if (!selectedItem) { setIsEditingTitle(false); return; }
+    const finalTitle = editedTitle.trim() || selectedItem.title; 
+    const updatedItem = { ...selectedItem, title: finalTitle };
+    await updateAndSave(updatedItem);
     setIsEditingTitle(false);
   };
 
@@ -399,7 +456,7 @@ export default function LastoWeb() {
         ...selectedItem,
         speakerNames: { ...selectedItem.speakerNames, [speakerKey]: newName }
     };
-    updateAndSave(updatedItem);
+    await updateAndSave(updatedItem);
   };
 
   const handleAddSpeaker = (name: string) => {
@@ -425,11 +482,11 @@ export default function LastoWeb() {
     const newNames = { ...selectedItem.speakerNames };
     delete newNames[source]; 
     const updatedItem = { ...selectedItem, speakerNames: newNames, utterances: newUtterances };
-    updateAndSave(updatedItem);
+    await updateAndSave(updatedItem);
     setIsMergeModalOpen(false);
   };
 
-  // --- LOGIC: EDITOR INSERT ---
+  // --- EDITOR INSERT ---
   const insertSpeakerAtCursor = (speakerKey: string) => {
     if (!textareaRef.current || !selectedItem) return;
     const textarea = textareaRef.current;
@@ -440,23 +497,24 @@ export default function LastoWeb() {
     const insertText = `\n${name.toUpperCase()}:\n`;
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
-    handleTextChange(newText);
+    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
+    updateAndSave(updatedItem);
+    
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start + insertText.length, start + insertText.length);
     }, 0);
   };
 
-  // --- LOGIC: DELETION ---
+  // --- DELETION ---
   const executeDeleteFile = async () => {
     if (!itemToDelete) return;
     setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
-        // Filtrujemy i od razu zapisujemy do chmury nową listę
         const updatedHistory = history.filter(item => item.id !== itemToDelete.id);
         setHistory(updatedHistory);
-        triggerAutoSave(updatedHistory); // <--- Zmiana: wymuszamy sync
+        triggerAutoSave(updatedHistory); 
 
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
         setIsDeleteModalOpen(false);
@@ -470,7 +528,7 @@ export default function LastoWeb() {
     const newNames = { ...selectedItem.speakerNames };
     delete newNames[speakerToDelete]; 
     const newUtterances = selectedItem.utterances?.filter(u => u.speaker !== speakerToDelete) || [];
-    updateAndSave({ ...selectedItem, speakerNames: newNames, utterances: newUtterances });
+    await updateAndSave({ ...selectedItem, speakerNames: newNames, utterances: newUtterances });
     setSpeakerToDelete(null);
   };
 
@@ -478,14 +536,14 @@ export default function LastoWeb() {
     setHistory([]);
     setSelectedItem(null);
     setIsDeleteAllModalOpen(false);
-    triggerAutoSave([]); // Sync pustej listy
+    triggerAutoSave([]); 
     setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wszystkie nagrania usunięte.' });
   };
 
-  // --- CONTEXT MENU HANDLERS ---
+  // --- CONTEXT MENU ---
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault(); 
-    e.stopPropagation(); // Ważne, żeby clickOutside nie zamknął od razu
+    e.stopPropagation(); 
     const textarea = e.target as HTMLTextAreaElement;
     setContextMenu({ visible: true, x: e.clientX, y: e.clientY, cursorIndex: textarea.selectionStart || 0 });
   };
@@ -512,7 +570,6 @@ export default function LastoWeb() {
   // --- RENDER ---
   return (
     <main className="flex h-screen bg-gray-950 text-white overflow-hidden font-sans transition-colors duration-300">
-      
       {/* SIDEBAR */}
       <div className={`lasto-sidebar ${isSidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
         <div className="sidebar-content">
@@ -520,7 +577,6 @@ export default function LastoWeb() {
             <h2 onClick={() => { setIsSidebarOpen(false); }} className="text-2xl font-light tracking-tight cursor-pointer">Archiwum</h2>
             <button onClick={() => { setIsSidebarOpen(false); }} className="icon-button"><RuneArrowLeft /></button>
           </div>
-
           <div className="archive-list">
             {history.map((item) => (
               <div 
@@ -537,16 +593,14 @@ export default function LastoWeb() {
               </div>
             ))}
           </div>
-
           <div className="sidebar-footer flex gap-2">
               <button 
-                onClick={loadFromCloud} 
+                onClick={() => loadFromCloud(false)} 
                 disabled={!pantryId || isProcessing} 
                 className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600'}`}
               >
                 <span>{pobierzState ? 'Pobrano' : 'Pobierz'}</span>
               </button>
-              
               {history.length > 0 && (
                 <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum">
                     <TrashIcon />
@@ -561,12 +615,8 @@ export default function LastoWeb() {
         <div className="top-bar">
           <div className="top-bar-left">
             {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="icon-button"><RuneArrowRight /></button>}
-            
-            {selectedItem && (
-                <button onClick={() => { setSelectedItem(null); }} className="btn-logo">Lasto</button>
-            )}
+            {selectedItem && <button onClick={() => { setSelectedItem(null); }} className="btn-logo">Lasto</button>}
           </div>
-          
           <button onClick={() => { setIsSettingsOpen(true); }} className="settings-trigger"><SettingsIcon /></button>
         </div>
 
@@ -582,10 +632,7 @@ export default function LastoWeb() {
                   <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
               ) : !apiKey ? (
                   <button 
-                    onClick={() => { 
-                      setSettingsStartTab('guide'); 
-                      setIsSettingsOpen(true); 
-                    }} 
+                    onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} 
                     className="btn-primary"
                   >
                     Dodaj pierwsze nagranie
@@ -600,18 +647,11 @@ export default function LastoWeb() {
                         className={`btn-import ${isDragging ? 'import-dragging' : ''}`}
                       >
                         {isDragging ? 'Upuść tutaj!' : 'Wybierz lub nagraj'}
-                        <input 
-                            type="file" 
-                            className="hidden" 
-                            accept="audio/*" 
-                            onChange={handleFileInput} 
-                        />
+                        <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
                       </label>
                     </div>
-
                     <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">
-                      PC: Przeciągnij plik tutaj<br/>
-                      iOS: Dyktafon → Udostępnij → Zachowaj w plikach
+                      PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach
                     </p>
                   </>
                 )}
@@ -619,8 +659,6 @@ export default function LastoWeb() {
             </div>
           ) : (
             <div className="editor-container">
-              
-              {/* HEADER Z TYTUŁEM */}
               <div className="flex items-center justify-between pb-6 border-b border-gray-800/50 mb-6">
                 {isEditingTitle ? (
                   <div className="flex items-center w-full min-w-0">
@@ -629,33 +667,16 @@ export default function LastoWeb() {
                         value={editedTitle} 
                         onChange={(e) => setEditedTitle(e.target.value)} 
                         onKeyDown={(e) => e.key === 'Enter' && saveNewTitle()} 
-                        onBlur={saveNewTitle} // <--- AUTO SAVE PRZY KLIKNIĘCIU POZA
+                        onBlur={saveNewTitle} 
                         autoFocus 
                     />
-                    <button onClick={saveNewTitle} className="ml-4 text-green-600 p-2">
-                        <CheckIcon />
-                    </button>
+                    <button onClick={saveNewTitle} className="ml-4 text-green-600 p-2"><CheckIcon /></button>
                   </div>
                 ) : (
                   <div className="flex items-center w-full min-w-0">
-                    <button 
-                        onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} 
-                        className="mr-4 text-gray-400 hover:text-red-500 p-2 transition-colors flex-shrink-0"
-                        title="Usuń nagranie"
-                    >
-                        <TrashIcon />
-                    </button>
-                    
-                    <div 
-                        className="flex items-center gap-3 cursor-pointer hover:text-gray-300 transition-colors min-w-0 overflow-hidden"
-                        onClick={() => { 
-                            setEditedTitle(selectedItem.title || ""); 
-                            setIsEditingTitle(true); 
-                        }}
-                    >
-                      <h1 className="text-xl md:text-2xl font-light text-white tracking-wide truncate">
-                          {selectedItem.title || "Bez tytułu"}
-                      </h1>
+                    <button onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} className="mr-4 text-gray-400 hover:text-red-500 p-2 transition-colors flex-shrink-0"><TrashIcon /></button>
+                    <div className="flex items-center gap-3 cursor-pointer hover:text-gray-300 transition-colors min-w-0 overflow-hidden" onClick={() => { setEditedTitle(selectedItem.title || ""); setIsEditingTitle(true); }}>
+                      <h1 className="text-xl md:text-2xl font-light text-white tracking-wide truncate">{selectedItem.title || "Bez tytułu"}</h1>
                       <span className="opacity-50 text-sm flex-shrink-0"><EditIcon /></span>
                     </div>
                   </div>
@@ -664,49 +685,17 @@ export default function LastoWeb() {
 
             <div className="speaker-list">
               {getAllSpeakers().map((speakerKey) => {
-                const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined 
-                  ? selectedItem.speakerNames[speakerKey] 
-                  : speakerKey;
-
+                const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined ? selectedItem.speakerNames[speakerKey] : speakerKey;
                 return (
                   <div key={speakerKey} className="speaker-badge">
-                    <button 
-                      onMouseDown={(e) => {
-                        e.preventDefault(); 
-                        insertSpeakerAtCursor(speakerKey);
-                      }}
-                      className="speaker-action-btn btn-insert"
-                      title="Wstaw do tekstu"
-                    >
-                      +
-                    </button>
-                    <input 
-                      className="speaker-input" 
-                      value={displayValue} 
-                      onChange={(e) => handleSpeakerNameChange(speakerKey, e.target.value)} 
-                      placeholder="Nazwa..." 
-                    />
-                    
-                    <button 
-                      onClick={() => handleDeleteSpeakerClick(speakerKey)} 
-                      className="speaker-action-btn btn-delete"
-                      title="Usuń rozmówcę"
-                    >
-                      <CloseIcon />
-                    </button>
+                    <button onMouseDown={(e) => { e.preventDefault(); insertSpeakerAtCursor(speakerKey); }} className="speaker-action-btn btn-insert" title="Wstaw do tekstu">+</button>
+                    <input className="speaker-input" value={displayValue} onChange={(e) => handleSpeakerNameChange(speakerKey, e.target.value)} placeholder="Nazwa..." />
+                    <button onClick={() => handleDeleteSpeakerClick(speakerKey)} className="speaker-action-btn btn-delete" title="Usuń rozmówcę"><CloseIcon /></button>
                   </div>
                 );
               })}
-              
-             <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">
-                Nowy
-              </button>
-              
-              {getAllSpeakers().length > 1 && (
-                 <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">
-                   Scal rozmówców
-                 </button>
-              )}
+             <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">Nowy</button>
+             {getAllSpeakers().length > 1 && <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">Scal rozmówców</button>}
             </div>
 
               <div className="relative flex-1 w-full min-h-0">
@@ -715,29 +704,18 @@ export default function LastoWeb() {
                   className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
                   value={getDisplayText(selectedItem)} 
                   onChange={(e) => handleTextChange(e.target.value)} 
-                  onBlur={() => triggerAutoSave()} // <--- AUTO SAVE PRZY WYJŚCIU Z EDYTORA
+                  onBlur={() => updateAndSave(selectedItem!)} 
                   onContextMenu={handleContextMenu} 
                 />
                 <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} 
                   className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
               </div>
-           
             </div>
           )}
         </div>
       </div>
 
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-        apiKey={apiKey} 
-        setApiKey={setApiKey} 
-        pantryId={pantryId} 
-        setPantryId={setPantryId} 
-        exportKeys={exportKeys} 
-        importKeys={importKeys} 
-        initialTab={settingsStartTab}
-      />   
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} setApiKey={setApiKey} pantryId={pantryId} setPantryId={setPantryId} exportKeys={exportKeys} importKeys={importKeys} initialTab={settingsStartTab} />   
       <DeleteModal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} onConfirm={executeDeleteFile} title={itemToDelete?.title} />
       <DeleteModal isOpen={!!speakerToDelete} onClose={() => setSpeakerToDelete(null)} onConfirm={confirmSpeakerDeletion} title={speakerToDelete ? getSpeakerName(speakerToDelete) || speakerToDelete : ""} />
       <DeleteModal isOpen={isDeleteAllModalOpen} onClose={() => setIsDeleteAllModalOpen(false)} onConfirm={executeDeleteAll} title="WSZYSTKO" />
@@ -746,16 +724,7 @@ export default function LastoWeb() {
       <AddSpeakerModal isOpen={isAddSpeakerModalOpen} onClose={() => setIsAddSpeakerModalOpen(false)} onConfirm={handleAddSpeaker} />
       
       {contextMenu && contextMenu.visible && (
-        <ContextMenu 
-            x={contextMenu.x} 
-            y={contextMenu.y} 
-            speakers={getAllSpeakers()} 
-            getSpeakerName={getSpeakerName} 
-            onInsert={(key) => insertSpeakerAtCursor(key)} 
-            onClose={() => setContextMenu(null)} 
-            onNewSpeaker={() => setIsAddSpeakerModalOpen(true)} 
-            onDragStart={startDrag} 
-        />
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} speakers={getAllSpeakers()} getSpeakerName={getSpeakerName} onInsert={(key) => insertSpeakerAtCursor(key)} onClose={() => setContextMenu(null)} onNewSpeaker={() => setIsAddSpeakerModalOpen(true)} onDragStart={startDrag} />
       )}
     </main>
   );
