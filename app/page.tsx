@@ -295,6 +295,37 @@ export default function LastoWeb() {
     const file = event.dataTransfer.files?.[0];
     if (file && apiKey) processFile(file);
   };
+  // Funkcja obsługująca wklejanie pliku ze schowka
+  const handlePaste = async () => {
+    try {
+      // Sprawdzamy, czy przeglądarka obsługuje czytanie schowka
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        setInfoModal({ isOpen: true, title: 'Brak obsługi', message: 'Twoja przeglądarka nie pozwala na bezpośredni dostęp do plików w schowku.' });
+        return;
+      }
+
+      const clipboardItems = await navigator.clipboard.read();
+      
+      for (const item of clipboardItems) {
+        // Szukamy typu audio
+        const audioType = item.types.find(type => type.startsWith('audio/'));
+        
+        if (audioType) {
+          const blob = await item.getType(audioType);
+          // Tworzymy plik z Bloba (nadajemy mu tymczasową nazwę)
+          const file = new File([blob], `wklejone_nagranie_${Date.now()}.wav`, { type: audioType });
+          processFile(file); // Wysyłamy do AI
+          return;
+        }
+      }
+      
+      setInfoModal({ isOpen: true, title: 'Pusty schowek', message: 'W schowku nie znaleziono pliku audio.' });
+
+    } catch (err) {
+      console.error(err);
+      setInfoModal({ isOpen: true, title: 'Błąd', message: 'Nie udało się odczytać schowka. Upewnij się, że nadałeś uprawnienia.' });
+    }
+  };
 
   // --- LOGIC: ACTIONS (TEXT, SPEAKERS) ---
 
@@ -506,7 +537,8 @@ export default function LastoWeb() {
                 <div className="hero-title">Lasto</div>
                 <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Pisz</span></div>
               </div>
-              <div className="import-zone">
+
+           <div className="import-zone">
                 {isProcessing ? (
                   <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
               ) : !apiKey ? (
@@ -521,27 +553,41 @@ export default function LastoWeb() {
                   </button>
                 ) : (
                   <>
-                    <label 
-                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} 
-                    onDragLeave={() => setIsDragging(false)} 
-                    onDrop={handleDrop} 
-                    className={`btn-import ${isDragging ? 'import-dragging' : ''}`}
-                  >
-                    {isDragging ? 'Upuść tutaj!' : 'Importuj nagranie'}
-                   <input 
-                        type="file" 
-                        className="hidden" 
-                        accept="audio/*" 
-                        capture="user" 
-                        onChange={handleFileInput} 
-                    />
-                  </label>
-                  <p className="format-hint mt-2 text-[10px] text-gray-500">
-                    iOS: Nagraj w Dyktafonie i wybierz plik.
-                  </p>
+                    <div className="flex flex-col items-center gap-4">
+                      {/* PRZYCISK IMPORTU (USUNIĘTO capture="user") */}
+                      <label 
+                        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} 
+                        onDragLeave={() => setIsDragging(false)} 
+                        onDrop={handleDrop} 
+                        className={`btn-import ${isDragging ? 'import-dragging' : ''}`}
+                      >
+                        {isDragging ? 'Upuść tutaj!' : 'Importuj plik audio'}
+                        <input 
+                            type="file" 
+                            className="hidden" 
+                            accept="audio/*" 
+                            // USUNIĘTO: capture="user" (dzięki temu system zapyta o źródło)
+                            onChange={handleFileInput} 
+                        />
+                      </label>
+
+                      {/* NOWY PRZYCISK WKLEJANIA */}
+                      <button 
+                        onClick={handlePaste}
+                        className="text-xs font-bold uppercase tracking-wider text-gray-500 hover:text-white transition-colors flex items-center gap-2 py-2 px-4 rounded-lg hover:bg-gray-800"
+                      >
+                        <IconCopy /> {/* Ikona schowka/kopiowania */}
+                        <span>Wklej ze schowka</span>
+                      </button>
+                    </div>
+
+                    <p className="format-hint mt-2 text-[10px] text-gray-500 text-center">
+                      WAV • MP3 • M4A
+                    </p>
                   </>
                 )}
               </div>
+
             </div>
           ) : (
             <div className="editor-container">
