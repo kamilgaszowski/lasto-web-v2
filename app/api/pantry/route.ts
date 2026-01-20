@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+
+// 1. WYMUSZENIE BRAKU CACHE W NEXT.JS
 export const dynamic = 'force-dynamic';
+export const revalidate = 0; 
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -7,19 +10,35 @@ export async function GET(request: Request) {
   
   if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
 
-  // Serwer łączy się z Pantry (AdBlock tego nie widzi)
-  const res = await fetch(`https://getpantry.cloud/apiv1/pantry/${id}/basket/lastoHistory?t=${Date.now()}`, {
-    headers: { 'Content-Type': 'application/json' },
-    cache: 'no-store'
-  });
+  try {
+    // 2. Pobieramy z Pantry z unikalnym timestampem
+    const res = await fetch(`https://getpantry.cloud/apiv1/pantry/${id}/basket/lastoHistory?t=${Date.now()}`, {
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      next: { revalidate: 0 } // Dodatkowe zabezpieczenie dla Next.js fetch
+    });
 
-  if (!res.ok) {
-    if (res.status === 404) return NextResponse.json({ empty: true }, { status: 404 });
-    return NextResponse.json({ error: 'Pantry error' }, { status: res.status });
+    if (!res.ok) {
+      if (res.status === 404) return NextResponse.json({ empty: true }, { status: 404 });
+      return NextResponse.json({ error: 'Pantry error' }, { status: res.status });
+    }
+
+    const data = await res.json();
+
+    // 3. Odsyłamy dane z "Atomowymi" nagłówkami anty-cache
+    return NextResponse.json(data, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Surrogate-Control': 'no-store',
+        'CDN-Cache-Control': 'no-store', // Dla Vercel/Cloudflare
+        'Vercel-CDN-Cache-Control': 'no-store'
+      }
+    });
+  } catch (error) {
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
-
-  const data = await res.json();
-  return NextResponse.json(data);
 }
 
 export async function POST(request: Request) {
@@ -32,7 +51,8 @@ export async function POST(request: Request) {
     const res = await fetch(`https://getpantry.cloud/apiv1/pantry/${id}/basket/lastoHistory`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(data),
+        cache: 'no-store'
     });
 
     if (!res.ok) return NextResponse.json({ error: 'Save failed' }, { status: res.status });

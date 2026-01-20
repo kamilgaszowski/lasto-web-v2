@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './lasto.css';
 
-// Importy Komponentów
+// Importy Komponentów (Twoja ścieżka)
 import { RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, CheckIcon, CloseIcon, TrashIcon, IconCopy } from '../components/Icons';
 import { DeleteModal, InfoModal, AddSpeakerModal, MergeModal } from '../components/CommonModals';
 import { SettingsModal } from '../components/SettingsModal';
@@ -20,13 +20,13 @@ export default function LastoWeb() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
   
-  // Refy dla Auto-Save (Debounce)
+  // Refy dla Auto-Save (Debounce) i Sync
   const selectedItemRef = useRef<HistoryItem | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // UI State
   const [status, setStatus] = useState('');
-  const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle'); // Nowy stan dla statusu chmury
+  const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [uploadStatus, setUploadStatus] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
@@ -75,6 +75,7 @@ export default function LastoWeb() {
             setHistory(sorted);
             
             if (savedPantryId) {
+                // Pobieramy przy starcie
                 loadFromCloud(true);
             }
         } catch (e) { console.error("Błąd bazy danych:", e); }
@@ -117,7 +118,9 @@ export default function LastoWeb() {
   };
 
   const getDisplayText = (item: HistoryItem) => {
+    // KLUCZOWE: Jeśli utterances są puste, wyświetlamy edytowany content
     if (!item.utterances || item.utterances.length === 0) return item.content;
+    
     const isJunk = (text: string, index: number) => {
         const badWords = ["prosimy", "poczekać", "połączenie", "kontynuować", "wkrótce", "rozmowę"];
         const lowerText = text.toLowerCase();
@@ -137,7 +140,7 @@ export default function LastoWeb() {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
 
-    setCloudStatus('saving'); // Pokaż status "Zapisywanie..."
+    setCloudStatus('saving'); 
     const dataToSave = overrideHistory || history;
 
     try {
@@ -157,8 +160,8 @@ export default function LastoWeb() {
             });
             if (!response.ok && response.status !== 429) throw new Error(response.statusText);
         }
-        setCloudStatus('saved'); // Sukces
-        setTimeout(() => setCloudStatus('idle'), 3000); // Ukryj po 3s
+        setCloudStatus('saved'); 
+        setTimeout(() => setCloudStatus('idle'), 3000); 
     } catch (e) { 
         console.warn("Auto-save skipped:", e); 
         setCloudStatus('error');
@@ -197,9 +200,11 @@ export default function LastoWeb() {
     if (!isSilent) setIsProcessing(true);
     
     try {
+        // Używamy cache: 'no-store' dla Chrome
         const res = await fetch(`/api/pantry?id=${cleanId}&t=${Date.now()}`, { 
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store' 
         });
         
         if (res.status === 429) {
@@ -253,6 +258,7 @@ export default function LastoWeb() {
                             updatesCount++;
                             dbSave(remoteItem);
                             
+                            // Aktualizuj widok tylko jeśli to ten sam element
                             if (currentOpenItem?.id === remoteItem.id) {
                                 setSelectedItem(remoteItem);
                             }
@@ -383,51 +389,66 @@ export default function LastoWeb() {
     return () => window.removeEventListener('paste', handlePaste);
   }, [isSettingsOpen, selectedItem, apiKey]);
 
-  // --- ACTIONS (DEBOUNCED TEXT SAVE) ---
+  // --- ACTIONS (ZAPIS Z NAPRAWĄ LOGIKI) ---
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
     
-    // 1. Natychmiastowa aktualizacja lokalnie (UI + DB)
-    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
-    setHistory(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+    // Zapisujemy ID nagrania, które edytujemy TERAZ (Capture ID)
+    const editingId = selectedItem.id;
+
+    // 1. Zmiana lokalna (Natychmiast)
+    const updatedItem = { ...selectedItem, content: newText };
+    // @ts-ignore
+    delete updatedItem.utterances;
+
     setSelectedItem(updatedItem);
+    setHistory(prev => prev.map(item => item.id === editingId ? updatedItem : item));
     await dbSave(updatedItem);
 
     // 2. Reset timera
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    setCloudStatus('idle');
+    setCloudStatus('saving');
 
-    // 3. Ustawienie nowego timera (2 sekundy ciszy = zapis)
+    // 3. Debounce (Zapis do chmury po 2s)
     saveTimeoutRef.current = setTimeout(async () => {
-        // POBIERZ AKTUALNE ID Z REF-A (żeby uniknąć starych closures)
-        const currentItem = selectedItemRef.current;
-        if (!currentItem) return;
+        // TUTAJ JEST NAPRAWA:
+        // Zamiast szukać w selectedItemRef (który mógł się zmienić),
+        // szukamy nagrania w Historii po editingId.
+        
+        setHistory(currentHistory => {
+            const itemIndex = currentHistory.findIndex(i => i.id === editingId);
+            if (itemIndex === -1) return currentHistory; // Usunięto w międzyczasie?
 
-        // Używamy zaktualizowanego tekstu (przekazanego w newText)
-        // Musimy zrekonstruować obiekt, bo selectedItemRef może być o krok do tyłu
-        const finalItemToSave = { 
-            ...currentItem, 
-            content: newText,
-            utterances: [], // Jeśli edytujesz tekst, usuwamy stare utterances
-            date: new Date().toISOString() // WAŻNE: Aktualizacja daty
-        };
-
-        // Aktualizacja stanu Historii z nową datą
-        setHistory(prev => {
-            const newHistory = prev.map(item => item.id === finalItemToSave.id ? finalItemToSave : item);
-            const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            const existingItem = currentHistory[itemIndex];
             
-            // Wywołaj wysyłkę do chmury
-            triggerAutoSave(sorted);
-            return sorted;
+            const finalItemToSave = { 
+                ...existingItem, 
+                content: newText,
+                date: new Date().toISOString() // Nowa data
+            };
+            // @ts-ignore
+            delete finalItemToSave.utterances;
+
+            // Tworzymy nową historię i sortujemy
+            const newHistory = [...currentHistory];
+            newHistory[itemIndex] = finalItemToSave;
+            const sortedHistory = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+            // Wyślij do chmury PEWNĄ listę
+            triggerAutoSave(sortedHistory);
+            
+            // Zapisz w DB
+            dbSave(finalItemToSave);
+
+            // Aktualizuj widok TYLKO jeśli użytkownik nadal patrzy na ten element
+            if (selectedItemRef.current?.id === editingId) {
+                setSelectedItem(finalItemToSave);
+            }
+
+            return sortedHistory;
         });
 
-        // Zapisz ostateczną wersję z nową datą w DB
-        await dbSave(finalItemToSave);
-        // Zaktualizuj selectedItem żeby miał nową datę
-        setSelectedItem(finalItemToSave);
-
-    }, 2000); // 2000ms opóźnienia
+    }, 2000); 
   };
 
   const updateAndSave = async (updatedItem: HistoryItem) => {
@@ -487,8 +508,9 @@ export default function LastoWeb() {
     const insertText = `\n${name.toUpperCase()}:\n`;
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
-    // To jest duża zmiana, więc zapisujemy od razu (nie debounce)
-    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
+    const updatedItem = { ...selectedItem, content: newText };
+    // @ts-ignore
+    delete updatedItem.utterances;
     updateAndSave(updatedItem);
     
     setTimeout(() => { textarea.focus(); textarea.setSelectionRange(start + insertText.length, start + insertText.length); }, 0);
@@ -610,7 +632,7 @@ export default function LastoWeb() {
                     <div className="flex items-center gap-3 cursor-pointer hover:text-gray-300 transition-colors min-w-0 overflow-hidden" onClick={() => { setEditedTitle(selectedItem.title || ""); setIsEditingTitle(true); }}>
                       <h1 className="text-xl md:text-2xl font-light text-white tracking-wide truncate">{selectedItem.title || "Bez tytułu"}</h1>
                       
-                      {/* STATUS CHMURY OBOK TYTUŁU */}
+                      {/* STATUS CHMURY */}
                       {cloudStatus === 'saving' && <span className="ml-3 text-[10px] text-gray-500 animate-pulse uppercase tracking-wider">Zapisywanie...</span>}
                       {cloudStatus === 'saved' && <span className="ml-3 text-[10px] text-green-500 uppercase tracking-wider">Zapisano</span>}
                       {cloudStatus === 'error' && <span className="ml-3 text-[10px] text-red-500 uppercase tracking-wider">Błąd zapisu</span>}
