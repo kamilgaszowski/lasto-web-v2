@@ -50,6 +50,8 @@ export default function LastoWeb() {
   const [copyState, setCopyState] = useState(false);
   const [pobierzState, setPobierzState] = useState(false);
 
+  const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
+
   // --- INIT ---
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
@@ -161,6 +163,48 @@ export default function LastoWeb() {
         }
     } catch (e: any) { setInfoModal({ isOpen: true, title: 'Błąd', message: e.message }); }
     finally { setIsProcessing(false); }
+  };
+
+  // --- KEYS MANAGEMENT (EXPORT / IMPORT) ---
+  
+  const exportKeys = () => {
+    const keys = { assemblyAIKey: apiKey, pantryId: pantryId };
+    const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `lasto_keys_backup.json`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importKeys = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        if (imported.assemblyAIKey || imported.pantryId) {
+          if (imported.assemblyAIKey) { 
+            setApiKey(imported.assemblyAIKey); 
+            localStorage.setItem('assemblyAIKey', imported.assemblyAIKey); 
+          }
+          if (imported.pantryId) { 
+            setPantryId(imported.pantryId); 
+            localStorage.setItem('pantryId', imported.pantryId); 
+          }
+          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zostały zaimportowane.' });
+        } else {
+            throw new Error("Brak kluczy w pliku");
+        }
+      } catch (err) { 
+        setInfoModal({ isOpen: true, title: 'Błąd', message: 'Nieprawidłowy format pliku.' }); 
+      }
+    };
+    reader.readAsText(file);
+    // Reset inputa, żeby można było wgrać ten sam plik ponownie w razie potrzeby
+    event.target.value = '';
   };
 
   // --- LOGIC: UPLOAD & AI (ASSEMBLY AI) ---
@@ -436,8 +480,16 @@ export default function LastoWeb() {
               <div className="import-zone">
                 {isProcessing ? (
                   <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
-                ) : !apiKey ? (
-                  <button onClick={() => setIsSettingsOpen(true)} className="btn-primary">Dodaj pierwsze nagranie</button>
+              ) : !apiKey ? (
+                  <button 
+                    onClick={() => { 
+                      setSettingsStartTab('guide'); // <-- Otwórz na Przewodniku
+                      setIsSettingsOpen(true); 
+                    }} 
+                    className="btn-primary"
+                  >
+                    Dodaj pierwsze nagranie
+                  </button>
                 ) : (
                   <>
                     <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
@@ -493,7 +545,18 @@ export default function LastoWeb() {
       </div>
 
       {/* MODALE */}
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} setApiKey={setApiKey} pantryId={pantryId} setPantryId={setPantryId} exportKeys={() => {}} importKeys={() => {}} />
+<SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        apiKey={apiKey} 
+        setApiKey={setApiKey} 
+        pantryId={pantryId} 
+        setPantryId={setPantryId} 
+        // TUTAJ BYŁY PUSTE FUNKCJE - TERAZ SĄ PODPIĘTE:
+        exportKeys={exportKeys} 
+        importKeys={importKeys} 
+        initialTab={settingsStartTab}
+      />   
       <DeleteModal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} onConfirm={executeDeleteFile} title={itemToDelete?.title} />
       <DeleteModal isOpen={!!speakerToDelete} onClose={() => setSpeakerToDelete(null)} onConfirm={confirmSpeakerDeletion} title={speakerToDelete ? getSpeakerName(speakerToDelete) || speakerToDelete : ""} />
       <DeleteModal isOpen={isDeleteAllModalOpen} onClose={() => setIsDeleteAllModalOpen(false)} onConfirm={executeDeleteAll} title="WSZYSTKO" />

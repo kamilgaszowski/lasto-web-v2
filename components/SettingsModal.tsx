@@ -10,10 +10,23 @@ interface SettingsModalProps {
     setPantryId: (id: string) => void;
     exportKeys: () => void;
     importKeys: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    initialTab?: 'guide' | 'form'; // NOWE: Pozwala sterować zakładką startową
 }
 
-export const SettingsModal = ({ isOpen, onClose, apiKey, setApiKey, pantryId, setPantryId, exportKeys, importKeys }: SettingsModalProps) => {
-    const [tab, setTab] = useState<'guide' | 'form'>('form');
+export const SettingsModal = ({ 
+    isOpen, 
+    onClose, 
+    apiKey, 
+    setApiKey, 
+    pantryId, 
+    setPantryId, 
+    exportKeys, 
+    importKeys,
+    initialTab = 'form' // Domyślnie formularz
+}: SettingsModalProps) => {
+    // Ustawiamy stan początkowy na podstawie propsa
+    const [tab, setTab] = useState<'guide' | 'form'>(initialTab);
+    
     if (!isOpen) return null;
 
     return (
@@ -27,6 +40,8 @@ export const SettingsModal = ({ isOpen, onClose, apiKey, setApiKey, pantryId, se
             <button onClick={() => setTab('guide')} className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest ${tab === 'guide' ? 'text-white bg-gray-800 border-b-2 border-white' : 'text-gray-500'}`}>Konfiguracja</button>
           </div>
 
+          {/* GUIDE PANEL */}
+         
           {/* GUIDE PANEL */}
           <div className={`guide-panel ${tab === 'guide' ? 'block' : 'hidden md:block'}`}>
             <h3 className="guide-heading">Przewodnik konfiguracji</h3>
@@ -56,25 +71,51 @@ export const SettingsModal = ({ isOpen, onClose, apiKey, setApiKey, pantryId, se
             </div>
           </div>
 
+
           {/* FORM PANEL */}
           <div className={`form-panel ${tab === 'form' ? 'block' : 'hidden md:block'}`}>
             <h3 className="settings-heading">Ustawienia</h3>
             <div className="space-y-12">
+              
+              {/* ZMIANA: Ulepszony formularz dla menedżerów haseł */}
               <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); onClose(); }}>
                 <div className="space-y-6">
+                  
+                  {/* AssemblyAI Input */}
                   <div className="input-group">
-                    <label className="input-label">AssemblyAI Key</label>
-                    <input type="password" className="settings-input" value={apiKey} onChange={(e) => { setApiKey(e.target.value); localStorage.setItem('assemblyAIKey', e.target.value); }} />
+                    <label htmlFor="assembly-key" className="input-label">AssemblyAI Key</label>
+                    <input 
+                      id="assembly-key"
+                      type="password" 
+                      name="assembly-api-key" 
+                      autoComplete="off" /* Wyłączamy auto-fill dla pierwszego klucza, żeby nie nadpisywał drugiego */
+                      className="settings-input" 
+                      value={apiKey} 
+                      onChange={(e) => { setApiKey(e.target.value); localStorage.setItem('assemblyAIKey', e.target.value); }} 
+                    />
                   </div>
+
+                  {/* Pantry ID Input */}
                   <div className="input-group">
-                    <label className="input-label">Pantry ID</label>
-                    <input type="password" className="settings-input" value={pantryId} onChange={(e) => { setPantryId(e.target.value); localStorage.setItem('pantryId', e.target.value); }} />
+                    <label htmlFor="pantry-id" className="input-label">Pantry ID</label>
+                    {/* Ukryty input username pomaga przeglądarce skojarzyć hasło z "kontem" */}
+                    <input type="text" name="username" value="LastoUser" autoComplete="username" className="hidden" readOnly />
+                    <input 
+                      id="pantry-id"
+                      type="password" 
+                      name="pantry-cloud-id" 
+                      autoComplete="current-password" 
+                      className="settings-input" 
+                      value={pantryId} 
+                      onChange={(e) => { setPantryId(e.target.value); localStorage.setItem('pantryId', e.target.value); }} 
+                    />
                   </div>
+
                 </div>
               </form>
+
               <div className="backup-section">
                 <label className="settings-label">Backup kluczy</label>
-             
                 <div className="backup-grid">
                   <button onClick={exportKeys} className="btn-backup">Zapisz do pliku</button>
                   <label className="btn-backup">Wczytaj plik <input type="file" className="hidden" accept=".json" onChange={importKeys} /></label>
