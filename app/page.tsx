@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './lasto.css';
 
-// Importy Komponentów (Twoja ścieżka)
+// Importy Komponentów
 import { RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, CheckIcon, CloseIcon, TrashIcon, IconCopy } from '../components/Icons';
 import { DeleteModal, InfoModal, AddSpeakerModal, MergeModal } from '../components/CommonModals';
 import { SettingsModal } from '../components/SettingsModal';
@@ -11,7 +11,7 @@ import { ContextMenu } from '../components/ContextMenu';
 
 // Importy Typów i Logiki
 import { HistoryItem } from '../types';
-import { dbSave, dbGetAll, dbDelete, compressHistory, decompressHistory } from '../lib/storage';
+import { dbSave, dbGetAll, dbDelete } from '../lib/storage'; // USUNĄŁEM IMPORT compressHistory/decompressHistory bo są wadliwe
 
 export default function LastoWeb() {
   // --- STATE ---
@@ -20,19 +20,21 @@ export default function LastoWeb() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
   
-  // Refy dla Auto-Save (Debounce) i Sync
+  // Refy
   const selectedItemRef = useRef<HistoryItem | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const latestTextRef = useRef<string>(''); 
+  const isUserTypingRef = useRef<boolean>(false); 
   
   // UI State
-  const [status, setStatus] = useState('');
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [status, setStatus] = useState('');
   const [uploadStatus, setUploadStatus] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
   
-  // Modals State
+  // Modals & Feedback
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [infoModal, setInfoModal] = useState<{ isOpen: boolean; title: string; message: string }>({ isOpen: false, title: '', message: '' });
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false); 
@@ -40,29 +42,58 @@ export default function LastoWeb() {
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
   
-  // Data State
   const [itemToDelete, setItemToDelete] = useState<HistoryItem | null>(null);
   const [speakerToDelete, setSpeakerToDelete] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
-  
-  // Context Menu & Drag
+  const [copyState, setCopyState] = useState(false);
+  const [pobierzState, setPobierzState] = useState(false);
+  const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
+
+  // Context Menu
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; cursorIndex: number } | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Button Feedback
-  const [copyState, setCopyState] = useState(false);
-  const [pobierzState, setPobierzState] = useState(false);
+  // --- POPRAWIONA KOMPRESJA DANYCH (LOCAL) ---
+  // To naprawia błąd pustego textarea: dodajemy pole 'c' (content)
+  const localCompressHistory = (historyData: HistoryItem[]) => {
+    return historyData.map(item => ({
+        id: item.id,
+        ti: item.title,
+        da: item.date,
+        sn: item.speakerNames,
+        c: item.content, // <--- TO JEST KLUCZOWE! Zapisujemy treść edytowaną
+        u: item.utterances?.map(u => ({ s: u.speaker, t: u.text })) || []
+    }));
+  };
 
-  const [settingsStartTab, setSettingsStartTab] = useState<'guide' | 'form'>('form');
+  const localDecompressHistory = (compressed: any[]): HistoryItem[] => {
+    return compressed.map(item => {
+        const utterances = item.u?.map((u: any) => ({ speaker: u.s, text: u.t })) || [];
+        // Jeśli jest 'c' (zapisana edycja), użyj jej. Jeśli nie, spróbuj złożyć z transkrypcji.
+        const content = item.c || utterances.map((u: any) => u.text).join('\n');
+        
+        return {
+            id: item.id,
+            title: item.ti,
+            date: item.da,
+            content: content,
+            utterances: utterances,
+            speakerNames: item.sn
+        };
+    });
+  };
 
   // --- REFS SYNC ---
   useEffect(() => {
     selectedItemRef.current = selectedItem;
+    if (selectedItem && !isUserTypingRef.current) {
+        latestTextRef.current = getDisplayText(selectedItem);
+    }
   }, [selectedItem]);
 
-  // --- INIT & AUTO-SYNC ---
+  // --- INIT ---
   useEffect(() => {
     setApiKey(localStorage.getItem('assemblyAIKey') || '');
     const savedPantryId = localStorage.getItem('pantryId') || '';
@@ -73,38 +104,30 @@ export default function LastoWeb() {
             const items = await dbGetAll();
             const sorted = items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             setHistory(sorted);
-            
-            if (savedPantryId) {
-                // Pobieramy przy starcie
-                loadFromCloud(true);
-            }
+            if (savedPantryId) loadFromCloud(true);
         } catch (e) { console.error("Błąd bazy danych:", e); }
     };
     initData();
   }, []); 
 
-  // --- POLLING (Co 60s) ---
+  // --- POLLING ---
   useEffect(() => {
     if (!pantryId) return;
     const interval = setInterval(() => {
-        // Nie pobieraj, jeśli użytkownik pisze (status saving) lub edytuje tytuł
-        if (!isEditingTitle && cloudStatus !== 'saving') {
+        if (!isEditingTitle && !isUserTypingRef.current && cloudStatus !== 'saving') {
             loadFromCloud(true);
         }
     }, 60000); 
     return () => clearInterval(interval);
   }, [pantryId, isEditingTitle, cloudStatus]);
 
-  // --- CLOSE CONTEXT MENU ---
   useEffect(() => {
-    const handleClickOutside = () => {
-      if (contextMenu) setContextMenu(null);
-    };
+    const handleClickOutside = () => { if (contextMenu) setContextMenu(null); };
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu]);
 
-  // --- LOGIC: HELPERS ---
+  // --- HELPERS ---
   const getAllSpeakers = () => {
     if (!selectedItem) return [];
     const fromTranscript = selectedItem.utterances?.map(u => u.speaker) || [];
@@ -118,9 +141,9 @@ export default function LastoWeb() {
   };
 
   const getDisplayText = (item: HistoryItem) => {
-    // KLUCZOWE: Jeśli utterances są puste, wyświetlamy edytowany content
-    if (!item.utterances || item.utterances.length === 0) return item.content;
-    
+    if (!item.utterances || item.utterances.length === 0) {
+        return item.content || "";
+    }
     const isJunk = (text: string, index: number) => {
         const badWords = ["prosimy", "poczekać", "połączenie", "kontynuować", "wkrótce", "rozmowę"];
         const lowerText = text.toLowerCase();
@@ -134,8 +157,7 @@ export default function LastoWeb() {
     }).join('\n');
   };
 
-  // --- LOGIC: CLOUD SYNC ---
-  
+  // --- SYNC ENGINE ---
   const triggerAutoSave = async (overrideHistory?: HistoryItem[]) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
@@ -144,7 +166,8 @@ export default function LastoWeb() {
     const dataToSave = overrideHistory || history;
 
     try {
-        const compressed = compressHistory(dataToSave);
+        // UŻYWAMY POPRAWIONEJ LOKALNEJ KOMPRESJI
+        const compressed = localCompressHistory(dataToSave);
         const CHUNK_SIZE = 50;
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
             const response = await fetch('/api/pantry', {
@@ -172,7 +195,7 @@ export default function LastoWeb() {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
     try {
-        const compressed = compressHistory(dataToSave);
+        const compressed = localCompressHistory(dataToSave);
         const CHUNK_SIZE = 50;
         for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
             await fetch('/api/pantry', {
@@ -191,6 +214,8 @@ export default function LastoWeb() {
   };
 
   const loadFromCloud = async (isSilent = false) => {
+    if (isUserTypingRef.current) return;
+
     const cleanId = pantryId?.trim();
     if (!cleanId) {
         if (!isSilent) setInfoModal({ isOpen: true, title: 'Brak ID', message: 'Wpisz Pantry ID w ustawieniach.' });
@@ -200,11 +225,10 @@ export default function LastoWeb() {
     if (!isSilent) setIsProcessing(true);
     
     try {
-        // Używamy cache: 'no-store' dla Chrome
         const res = await fetch(`/api/pantry?id=${cleanId}&t=${Date.now()}`, { 
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
-            cache: 'no-store' 
+            cache: 'no-store'
         });
         
         if (res.status === 429) {
@@ -233,9 +257,12 @@ export default function LastoWeb() {
         else if (data.history && Array.isArray(data.history)) { remoteCompressed = data.history; }
 
         if (remoteCompressed.length > 0) {
-             const remoteHistory = decompressHistory(remoteCompressed);
+             // UŻYWAMY POPRAWIONEJ LOKALNEJ DEKOMPRESJI
+             const remoteHistory = localDecompressHistory(remoteCompressed);
              
              setHistory(prev => {
+                if (isUserTypingRef.current) return prev;
+
                 const localMap = new Map(prev.map(item => [item.id, item]));
                 let updatesCount = 0;
                 let newCount = 0;
@@ -257,11 +284,7 @@ export default function LastoWeb() {
                             localMap.set(remoteItem.id, remoteItem);
                             updatesCount++;
                             dbSave(remoteItem);
-                            
-                            // Aktualizuj widok tylko jeśli to ten sam element
-                            if (currentOpenItem?.id === remoteItem.id) {
-                                setSelectedItem(remoteItem);
-                            }
+                            if (currentOpenItem?.id === remoteItem.id) setSelectedItem(remoteItem);
                         }
                     }
                 });
@@ -290,6 +313,71 @@ export default function LastoWeb() {
         if (!isSilent) setInfoModal({ isOpen: true, title: 'Błąd', message: e.message }); 
     }
     finally { setIsProcessing(false); }
+  };
+
+  // --- ACTIONS: ZAPIS TEKSTU ---
+  
+  const performSaveText = (itemId: string, textToSave: string) => {
+      setHistory(currentHistory => {
+          const itemIndex = currentHistory.findIndex(i => i.id === itemId);
+          if (itemIndex === -1) return currentHistory;
+
+          const existingItem = currentHistory[itemIndex];
+          
+          const finalItemToSave = { 
+              ...existingItem, 
+              content: textToSave, 
+              utterances: [], // Czyścimy transkrypcję
+              date: new Date().toISOString()
+          };
+
+          const newHistory = [...currentHistory];
+          newHistory[itemIndex] = finalItemToSave;
+          const sortedHistory = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+          triggerAutoSave(sortedHistory);
+          dbSave(finalItemToSave);
+
+          if (selectedItemRef.current?.id === itemId) {
+              setSelectedItem(finalItemToSave);
+          }
+          
+          isUserTypingRef.current = false;
+          return sortedHistory;
+      });
+  };
+
+  const handleTextChange = async (newText: string) => {
+    if (!selectedItem) return;
+    
+    isUserTypingRef.current = true;
+    const editingId = selectedItem.id;
+
+    // Szybki update lokalny
+    const updatedItem = { 
+        ...selectedItem, 
+        content: newText, 
+        utterances: [], 
+        date: new Date().toISOString() 
+    };
+
+    setSelectedItem(updatedItem);
+    setHistory(prev => prev.map(item => item.id === editingId ? updatedItem : item));
+    await dbSave(updatedItem);
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setCloudStatus('saving');
+
+    saveTimeoutRef.current = setTimeout(() => {
+        performSaveText(editingId, newText);
+    }, 2000); 
+  };
+
+  const handleTextBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      if (selectedItem) {
+          performSaveText(selectedItem.id, e.target.value);
+      }
   };
 
   // --- KEYS MANAGEMENT ---
@@ -322,7 +410,7 @@ export default function LastoWeb() {
     event.target.value = '';
   };
 
-  // --- LOGIC: UPLOAD & AI ---
+  // --- UPLOAD & AI ---
   const checkStatus = async (id: string, fileName: string) => {
     const interval = setInterval(async () => {
       try {
@@ -375,7 +463,6 @@ export default function LastoWeb() {
     const file = event.dataTransfer.files?.[0]; if (file && apiKey) processFile(file);
   };
 
-  // --- PASTE HANDLER ---
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       if (isSettingsOpen || selectedItem) return;
@@ -388,68 +475,6 @@ export default function LastoWeb() {
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [isSettingsOpen, selectedItem, apiKey]);
-
-  // --- ACTIONS (ZAPIS Z NAPRAWĄ LOGIKI) ---
-  const handleTextChange = async (newText: string) => {
-    if (!selectedItem) return;
-    
-    // Zapisujemy ID nagrania, które edytujemy TERAZ (Capture ID)
-    const editingId = selectedItem.id;
-
-    // 1. Zmiana lokalna (Natychmiast)
-    const updatedItem = { ...selectedItem, content: newText };
-    // @ts-ignore
-    delete updatedItem.utterances;
-
-    setSelectedItem(updatedItem);
-    setHistory(prev => prev.map(item => item.id === editingId ? updatedItem : item));
-    await dbSave(updatedItem);
-
-    // 2. Reset timera
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    setCloudStatus('saving');
-
-    // 3. Debounce (Zapis do chmury po 2s)
-    saveTimeoutRef.current = setTimeout(async () => {
-        // TUTAJ JEST NAPRAWA:
-        // Zamiast szukać w selectedItemRef (który mógł się zmienić),
-        // szukamy nagrania w Historii po editingId.
-        
-        setHistory(currentHistory => {
-            const itemIndex = currentHistory.findIndex(i => i.id === editingId);
-            if (itemIndex === -1) return currentHistory; // Usunięto w międzyczasie?
-
-            const existingItem = currentHistory[itemIndex];
-            
-            const finalItemToSave = { 
-                ...existingItem, 
-                content: newText,
-                date: new Date().toISOString() // Nowa data
-            };
-            // @ts-ignore
-            delete finalItemToSave.utterances;
-
-            // Tworzymy nową historię i sortujemy
-            const newHistory = [...currentHistory];
-            newHistory[itemIndex] = finalItemToSave;
-            const sortedHistory = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-            // Wyślij do chmury PEWNĄ listę
-            triggerAutoSave(sortedHistory);
-            
-            // Zapisz w DB
-            dbSave(finalItemToSave);
-
-            // Aktualizuj widok TYLKO jeśli użytkownik nadal patrzy na ten element
-            if (selectedItemRef.current?.id === editingId) {
-                setSelectedItem(finalItemToSave);
-            }
-
-            return sortedHistory;
-        });
-
-    }, 2000); 
-  };
 
   const updateAndSave = async (updatedItem: HistoryItem) => {
       const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
@@ -508,9 +533,8 @@ export default function LastoWeb() {
     const insertText = `\n${name.toUpperCase()}:\n`;
     const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
-    const updatedItem = { ...selectedItem, content: newText };
-    // @ts-ignore
-    delete updatedItem.utterances;
+    // Zapis natychmiastowy
+    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
     updateAndSave(updatedItem);
     
     setTimeout(() => { textarea.focus(); textarea.setSelectionRange(start + insertText.length, start + insertText.length); }, 0);
@@ -541,7 +565,6 @@ export default function LastoWeb() {
     setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Usunięto wszystko.' });
   };
 
-  // --- CONTEXT MENU ---
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation(); 
     const textarea = e.target as HTMLTextAreaElement;
@@ -631,12 +654,9 @@ export default function LastoWeb() {
                     <button onClick={() => { setItemToDelete(selectedItem); setIsDeleteModalOpen(true); }} className="mr-4 text-gray-400 hover:text-red-500 p-2 transition-colors flex-shrink-0"><TrashIcon /></button>
                     <div className="flex items-center gap-3 cursor-pointer hover:text-gray-300 transition-colors min-w-0 overflow-hidden" onClick={() => { setEditedTitle(selectedItem.title || ""); setIsEditingTitle(true); }}>
                       <h1 className="text-xl md:text-2xl font-light text-white tracking-wide truncate">{selectedItem.title || "Bez tytułu"}</h1>
-                      
-                      {/* STATUS CHMURY */}
                       {cloudStatus === 'saving' && <span className="ml-3 text-[10px] text-gray-500 animate-pulse uppercase tracking-wider">Zapisywanie...</span>}
                       {cloudStatus === 'saved' && <span className="ml-3 text-[10px] text-green-500 uppercase tracking-wider">Zapisano</span>}
                       {cloudStatus === 'error' && <span className="ml-3 text-[10px] text-red-500 uppercase tracking-wider">Błąd zapisu</span>}
-                      
                       <span className="opacity-50 text-sm flex-shrink-0 ml-2"><EditIcon /></span>
                     </div>
                   </div>
@@ -663,6 +683,7 @@ export default function LastoWeb() {
                     className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
                     value={getDisplayText(selectedItem)} 
                     onChange={(e) => handleTextChange(e.target.value)} 
+                    onBlur={handleTextBlur}
                     onContextMenu={handleContextMenu} 
                 />
                 <button onClick={() => { navigator.clipboard.writeText(getDisplayText(selectedItem)); setCopyState(true); setTimeout(() => setCopyState(false), 2000); }} className={`absolute top-4 right-4 p-2 rounded-lg transition-all ${copyState ? 'text-green-500' : 'text-gray-400'}`}>{copyState ? <CheckIcon /> : <IconCopy />}</button>
