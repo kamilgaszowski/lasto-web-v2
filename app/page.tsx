@@ -13,6 +13,39 @@ import { ContextMenu } from '../components/ContextMenu';
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete } from '../lib/storage';
 
+// --- NOWY KOMPONENT LOADERA (MASZYNA DO PISANIA) ---
+const TypewriterLoader = () => {
+  const [text, setText] = useState('');
+  
+  useEffect(() => {
+    // Zestaw znaków: Litery + Cyfry dla efektu "dekodowania"
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    
+    const interval = setInterval(() => {
+      setText(prev => {
+        // Jeśli tekst jest za długi, czyścimy go (pętla)
+        if (prev.length > 10) return '';
+        // Dodajemy losowy znak + spację dla czytelności
+        return prev + chars[Math.floor(Math.random() * chars.length)] + ' ';
+      });
+    }, 100); // Prędkość pojawiania się znaków (200ms)
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center justify-center">
+      {/* Font-mono jest kluczowy dla efektu maszyny */}
+      <div className="font-mono text-md md:text-sm font-light tracking-widest text-white/90 min-h-[3rem] animate-pulse">
+        {text}
+        {/* Migający kursor na końcu */}
+         <span className="inline-block w-1 h-3 md:h-4 bg-white ml-4 animate-pulse align-middle"></span>
+      </div>
+      <span className="inline-block w-1 h-3 md:h-4 bg-white ml-4 animate-pulse align-middle"></span>
+    </div>
+  );
+};
+
 export default function LastoWeb() {
   // --- STATE ---
   const [apiKey, setApiKey] = useState('');
@@ -29,9 +62,9 @@ export default function LastoWeb() {
   
   // UI State
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [status, setStatus] = useState(''); // Status tekstowy (np. "Wysyłanie...")
+  const [status, setStatus] = useState('');
   const [uploadStatus, setUploadStatus] = useState(''); 
-  const [isProcessing, setIsProcessing] = useState(false); // Ogólna flaga zajętości
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
   
@@ -276,7 +309,7 @@ export default function LastoWeb() {
         });
         
         if (res.status === 429) {
-            if (!isSilent) setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Serwer zajęty. Spróbuj za chwilę.' });
+            if (!isSilent) setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Za dużo zapytań. Odczekaj chwilę.' });
             setIsProcessing(false);
             return; 
         }
@@ -444,7 +477,7 @@ export default function LastoWeb() {
           });
           setSelectedItem(newItem);
           setIsProcessing(false);
-          setStatus(''); // Reset statusu po zakończeniu
+          setStatus(''); // Reset statusu
         } else if (result.status === 'error') { clearInterval(interval); setStatus('Błąd AI'); setIsProcessing(false); }
       } catch (err) { clearInterval(interval); setIsProcessing(false); }
     }, 3000);
@@ -453,7 +486,7 @@ export default function LastoWeb() {
   const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
-    setStatus('Wysyłanie...'); // Ustawiamy status, żeby aktywować loader w głównym oknie
+    setStatus('Wysyłanie...'); // Ustawiamy status
     try {
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': apiKey }, body: file });
       const { upload_url } = await uploadRes.json();
@@ -470,7 +503,6 @@ export default function LastoWeb() {
   const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) processFile(file);
-    // Reset input
     event.target.value = '';
   };
   const handleDrop = (event: React.DragEvent) => {
@@ -631,10 +663,15 @@ export default function LastoWeb() {
             ))}
           </div>
           <div className="sidebar-footer flex gap-2">
-              {/* BUTTON AKTUALIZUJ - KRĘCIOŁEK TYLKO PRZY SYNC (status pusty) */}
-              <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600'}`}>
-                {isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen ? <span className="w-3 h-3 border-2 border-t-transparent border-gray-500 rounded-full animate-spin mr-2"/> : null}
-                <span>{pobierzState ? 'Gotowe' : 'Aktualizuj'}</span>
+              <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`flex-1 relative overflow-hidden flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600 active:scale-95'}`}>
+                {/* KRĘCIOŁEK W SIDEBARZE (tylko przy sync) */}
+                {isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen && (
+                  <svg className="animate-spin h-4 w-4 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                )}
+                <span className={isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen ? "animate-pulse" : ""}>{pobierzState ? 'Gotowe' : (isProcessing && !status ? 'Pobieranie...' : 'Aktualizuj')}</span>
               </button>
               {history.length > 0 && <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum"><TrashIcon /></button>}
           </div>
@@ -656,9 +693,12 @@ export default function LastoWeb() {
                 <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Pisz</span></div>
               </div>
               <div className="import-zone">
-                {/* IMPORT ZONE - POKAŻ LOADER JEŚLI JEST STATUS (WYSYŁANIE/AI) */}
+                {/* TUTAJ WSTAWIAMY NOWY TYPEWRITER LOADER */}
                 {isProcessing && status ? (
-                  <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status}</span></div>
+                  <div className="flex flex-col items-center justify-center space-y-2 py-2 animate-in fade-in zoom-in duration-2000">
+                    <TypewriterLoader />
+                    <span className="text-sm font-light tracking-wide text-white/60 animate-pulse">{uploadStatus || status}</span>
+                  </div>
               ) : !apiKey ? (
                   <button onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} className="btn-primary">Dodaj pierwsze nagranie</button>
                 ) : (
