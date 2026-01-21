@@ -675,8 +675,12 @@ export default function LastoWeb() {
                     <div className="flex flex-col items-center gap-4">
                       <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
                         {isDragging ? 'Upuść tutaj!' : 'Wybierz lub nagraj'}
-                        <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
-                      </label>
+<input 
+  type="file" 
+  className="hidden" 
+  accept="audio/*, .m4a, .mp3, .wav, .aac, .mp4, .x-m4a, audio/mp4, audio/x-m4a" 
+  onChange={handleFileInput} 
+/>                      </label>
                     </div>
                     <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach</p>
                   </>
