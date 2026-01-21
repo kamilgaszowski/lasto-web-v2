@@ -29,9 +29,9 @@ export default function LastoWeb() {
   
   // UI State
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(''); // Status tekstowy (np. "Wysyłanie...")
   const [uploadStatus, setUploadStatus] = useState(''); 
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false); // Ogólna flaga zajętości
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
   
@@ -90,58 +90,33 @@ export default function LastoWeb() {
     }
   }, [selectedItem]);
 
-  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
-  // --- GLOBAL KEYBOARD SHORTCUTS (ENTER/ESC) ---
+  // --- KEYBOARD SHORTCUTS ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        // Jeśli trwa przetwarzanie, blokujemy akcje
         if (isProcessing) return;
-
-        // 1. Modal Info
-        if (infoModal.isOpen) {
-            if (e.key === 'Enter' || e.key === 'Escape') setInfoModal(prev => ({ ...prev, isOpen: false }));
-            return;
-        }
-
-        // 2. Modal Usuwania Pojedynczego
+        if (infoModal.isOpen && (e.key === 'Enter' || e.key === 'Escape')) setInfoModal(prev => ({ ...prev, isOpen: false }));
         if (isDeleteModalOpen) {
             if (e.key === 'Enter') executeDeleteFile();
             if (e.key === 'Escape') setIsDeleteModalOpen(false);
-            return;
         }
-
-        // 3. Modal Usuwania Wszystkiego
         if (isDeleteAllModalOpen) {
             if (e.key === 'Enter') executeDeleteAll();
             if (e.key === 'Escape') setIsDeleteAllModalOpen(false);
-            return;
         }
-
-        // 4. Modal Usuwania Rozmówcy
         if (speakerToDelete) {
             if (e.key === 'Enter') confirmSpeakerDeletion();
             if (e.key === 'Escape') setSpeakerToDelete(null);
-            return;
         }
-
-        // 5. Modal Scalania (tylko ESC, Enter obsłużony w formularzu)
-        if (isMergeModalOpen) {
-            if (e.key === 'Escape') setIsMergeModalOpen(false);
-            return;
-        }
-
-        // 6. Ustawienia (tylko ESC)
-        if (isSettingsOpen) {
-            if (e.key === 'Escape') setIsSettingsOpen(false);
-            return;
-        }
+        if (isMergeModalOpen && e.key === 'Escape') setIsMergeModalOpen(false);
+        if (isSettingsOpen && e.key === 'Escape') setIsSettingsOpen(false);
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isProcessing, infoModal.isOpen, isDeleteModalOpen, isDeleteAllModalOpen, speakerToDelete, isMergeModalOpen, isSettingsOpen]);
-
 
   // --- INIT ---
   useEffect(() => {
@@ -206,7 +181,7 @@ export default function LastoWeb() {
     }).join('\n');
   };
 
-  // --- SYNC ENGINE ---
+  // --- CLOUD SYNC ---
   const triggerAutoSave = async (overrideHistory?: HistoryItem[]) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
@@ -216,21 +191,35 @@ export default function LastoWeb() {
 
     try {
         const compressed = localCompressHistory(dataToSave);
-        const CHUNK_SIZE = 50;
-        for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-            const response = await fetch('/api/pantry', {
+        
+        if (compressed.length === 0) {
+             const response = await fetch('/api/pantry', {
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     id: cleanId,
-                    data: {
-                        [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
-                        manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
-                    }
+                    data: { history: [] }
                 })
             });
             if (!response.ok && response.status !== 429) throw new Error(response.statusText);
+        } else {
+            const CHUNK_SIZE = 50;
+            for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
+                const response = await fetch('/api/pantry', {
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        id: cleanId,
+                        data: {
+                            [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
+                            manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                        }
+                    })
+                });
+                if (!response.ok && response.status !== 429) throw new Error(response.statusText);
+            }
         }
+        
         setCloudStatus('saved'); 
         setTimeout(() => setCloudStatus('idle'), 3000); 
     } catch (e) { 
@@ -244,19 +233,26 @@ export default function LastoWeb() {
     if (!cleanId) return;
     try {
         const compressed = localCompressHistory(dataToSave);
-        const CHUNK_SIZE = 50;
-        for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-            await fetch('/api/pantry', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    id: cleanId,
-                    data: {
-                        [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
-                        manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
-                    }
-                })
+        if (compressed.length === 0) {
+             await fetch('/api/pantry', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: cleanId, data: { history: [] } })
             });
+        } else {
+            const CHUNK_SIZE = 50;
+            for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
+                await fetch('/api/pantry', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        id: cleanId,
+                        data: {
+                            [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
+                            manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
+                        }
+                    })
+                });
+            }
         }
     } catch (e) { console.error("Cloud upload failed", e); }
   };
@@ -308,7 +304,6 @@ export default function LastoWeb() {
              const remoteHistory = localDecompressHistory(remoteCompressed);
              const sortedRemote = remoteHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-             // HARD SYNC: Nadpisz wszystko tym co jest w chmurze
              const currentLocalItems = historyRef.current;
              for (const item of currentLocalItems) { await dbDelete(item); }
              for (const item of sortedRemote) { await dbSave(item); }
@@ -337,7 +332,6 @@ export default function LastoWeb() {
   };
 
   // --- ACTIONS: ZAPIS TEKSTU ---
-  
   const performSaveText = (itemId: string, textToSave: string) => {
       setHistory(currentHistory => {
           const itemIndex = currentHistory.findIndex(i => i.id === itemId);
@@ -450,7 +444,7 @@ export default function LastoWeb() {
           });
           setSelectedItem(newItem);
           setIsProcessing(false);
-          setStatus('');
+          setStatus(''); // Reset statusu po zakończeniu
         } else if (result.status === 'error') { clearInterval(interval); setStatus('Błąd AI'); setIsProcessing(false); }
       } catch (err) { clearInterval(interval); setIsProcessing(false); }
     }, 3000);
@@ -459,7 +453,7 @@ export default function LastoWeb() {
   const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
-    setStatus('Wysyłanie...');
+    setStatus('Wysyłanie...'); // Ustawiamy status, żeby aktywować loader w głównym oknie
     try {
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': apiKey }, body: file });
       const { upload_url } = await uploadRes.json();
@@ -476,6 +470,8 @@ export default function LastoWeb() {
   const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) processFile(file);
+    // Reset input
+    event.target.value = '';
   };
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault(); setIsDragging(false);
@@ -559,16 +555,13 @@ export default function LastoWeb() {
     setTimeout(() => { textarea.focus(); textarea.setSelectionRange(start + insertText.length, start + insertText.length); }, 0);
   };
 
-  // --- DELETE LOGIC ---
   const executeDeleteFile = async () => {
     if (!itemToDelete) return; 
-    setIsProcessing(true); // Ustawiamy flagę ładowania (dla wyszarzenia przycisku)
+    setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
         const updatedHistory = history.filter(item => item.id !== itemToDelete.id);
         setHistory(updatedHistory);
-        
-        // Zapisz nową (krótszą) listę do chmury
         await triggerAutoSave(updatedHistory); 
 
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
@@ -589,11 +582,8 @@ export default function LastoWeb() {
   const executeDeleteAll = async () => {
     setIsProcessing(true);
     try {
-        // Czyścimy wszystko
         setHistory([]);
         setSelectedItem(null);
-        
-        // Kasujemy w chmurze (nadpisujemy pustą listą)
         await triggerAutoSave([]); 
         
         const allItems = await dbGetAll();
@@ -641,9 +631,9 @@ export default function LastoWeb() {
             ))}
           </div>
           <div className="sidebar-footer flex gap-2">
-              {/* PRZYCISK AKTUALIZUJ - Przekazujemy isLoading do stylu */}
+              {/* BUTTON AKTUALIZUJ - KRĘCIOŁEK TYLKO PRZY SYNC (status pusty) */}
               <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600'}`}>
-                {isProcessing && !isDeleteModalOpen && !isDeleteAllModalOpen ? <span className="w-3 h-3 border-2 border-t-transparent border-gray-500 rounded-full animate-spin mr-2"/> : null}
+                {isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen ? <span className="w-3 h-3 border-2 border-t-transparent border-gray-500 rounded-full animate-spin mr-2"/> : null}
                 <span>{pobierzState ? 'Gotowe' : 'Aktualizuj'}</span>
               </button>
               {history.length > 0 && <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum"><TrashIcon /></button>}
@@ -666,21 +656,18 @@ export default function LastoWeb() {
                 <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Pisz</span></div>
               </div>
               <div className="import-zone">
-                {isProcessing && !isDeleteModalOpen && !isDeleteAllModalOpen && !pantryId ? ( // Pokazuj loader tylko przy uploadzie
-                  <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status || 'Przetwarzanie...'}</span></div>
+                {/* IMPORT ZONE - POKAŻ LOADER JEŚLI JEST STATUS (WYSYŁANIE/AI) */}
+                {isProcessing && status ? (
+                  <div className="flex flex-col items-center space-y-3"><div className="loader-spin" /><span className="loader-text">{uploadStatus || status}</span></div>
               ) : !apiKey ? (
                   <button onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} className="btn-primary">Dodaj pierwsze nagranie</button>
                 ) : (
                   <>
                     <div className="flex flex-col items-center gap-4">
                       <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
-                        {isDragging ? 'Upuść tutaj!' : 'Wybierz lub nagraj'}
-<input 
-  type="file" 
-  className="hidden" 
-  accept="audio/*, .m4a, .mp3, .wav, .aac, .mp4, .x-m4a, audio/mp4, audio/x-m4a" 
-  onChange={handleFileInput} 
-/>                      </label>
+                        {isDragging ? 'Upuść tutaj!' : 'Dodaj plik audio'}
+                        <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
+                      </label>
                     </div>
                     <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach</p>
                   </>
@@ -739,7 +726,6 @@ export default function LastoWeb() {
         </div>
       </div>
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} setApiKey={setApiKey} pantryId={pantryId} setPantryId={setPantryId} exportKeys={exportKeys} importKeys={importKeys} initialTab={settingsStartTab} />   
-      {/* PRZEKAZUJEMY isLoading DO MODALI */}
       <DeleteModal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} onConfirm={executeDeleteFile} title={itemToDelete?.title} isLoading={isProcessing} />
       <DeleteModal isOpen={!!speakerToDelete} onClose={() => setSpeakerToDelete(null)} onConfirm={confirmSpeakerDeletion} title={speakerToDelete ? getSpeakerName(speakerToDelete) || speakerToDelete : ""} isLoading={isProcessing} />
       <DeleteModal isOpen={isDeleteAllModalOpen} onClose={() => setIsDeleteAllModalOpen(false)} onConfirm={executeDeleteAll} title="WSZYSTKO" isLoading={isProcessing} />
