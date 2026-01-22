@@ -13,35 +13,71 @@ import { ContextMenu } from '../components/ContextMenu';
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete } from '../lib/storage';
 
-// --- NOWY KOMPONENT LOADERA (MASZYNA DO PISANIA) ---
-const TypewriterLoader = () => {
+const TypewriterLoader = ({ message }: { message: string }) => {
   const [text, setText] = useState('');
-  
-  useEffect(() => {
-    // Zestaw znaków: Litery + Cyfry dla efektu "dekodowania"
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    
-    const interval = setInterval(() => {
-      setText(prev => {
-        // Jeśli tekst jest za długi, czyścimy go (pętla)
-        if (prev.length > 10) return '';
-        // Dodajemy losowy znak + spację dla czytelności
-        return prev + chars[Math.floor(Math.random() * chars.length)] + ' ';
-      });
-    }, 100); // Prędkość pojawiania się znaków (200ms)
+  const [showCursor, setShowCursor] = useState(true);
+  const isDeleting = useRef(false);
 
-    return () => clearInterval(interval);
+  useEffect(() => {
+    // DOMYŚLNA SZYBKOŚĆ (pisanie)
+    let speed = 50; 
+    
+    // 1. ZMIANA STATUSU (PRIORYTET):
+    // Jeśli status się zmienił (np. z Wysyłanie na Przetwarzanie) i tekst nie pasuje -> SZYBKIE KASOWANIE
+    if (!message.startsWith(text) && text.length > 0) {
+       isDeleting.current = true;
+       speed = 30; 
+    }
+    // 2. KONIEC SŁOWA (PĘTLA):
+    // Jeśli napisaliśmy całe słowo -> Czekamy chwilę i ZACZYNAMY KASOWAĆ (żeby zrobić pętlę)
+    else if (text === message && !isDeleting.current) {
+       isDeleting.current = true;
+       speed = 700; // Długa pauza, żeby użytkownik przeczytał komunikat
+    }
+    // 3. PUSTY TEKST (PĘTLA):
+    // Jeśli skasowaliśmy wszystko -> Czekamy chwilę i ZACZYNAMY PISAĆ OD NOWA
+    else if (text.length === 0 && isDeleting.current) {
+       isDeleting.current = false;
+       speed = 700; // Krótka pauza przed ponownym pisaniem
+    }
+    // 4. KASOWANIE W TRAKCIE
+    else if (isDeleting.current) {
+       speed = 25; // Bardzo szybkie kasowanie
+    }
+
+    const timer = setTimeout(() => {
+      setText(current => {
+        if (isDeleting.current) {
+          // Kasowanie (zabezpieczenie przed ujemnym slice)
+          return current.length > 0 ? current.slice(0, -1) : '';
+        } else {
+          // Pisanie (pobieramy litery z message)
+          return message.slice(0, current.length + 1);
+        }
+      });
+    }, speed);
+
+    return () => clearTimeout(timer);
+  }, [text, message]);
+
+  // Efekt 2: Miganie kursora
+  useEffect(() => {
+    const blinkInterval = setInterval(() => {
+      setShowCursor(prev => !prev);
+    }, 150); 
+    return () => clearInterval(blinkInterval);
   }, []);
 
   return (
-    <div className="flex flex-col items-center justify-center">
-      {/* Font-mono jest kluczowy dla efektu maszyny */}
-      <div className="font-mono text-md md:text-sm font-light tracking-widest text-white/90 min-h-[3rem] animate-pulse">
-        {text}
-        {/* Migający kursor na końcu */}
-         <span className="inline-block w-1 h-3 md:h-4 bg-white ml-4 animate-pulse align-middle"></span>
+    <div className="flex flex-col items-center justify-center h-16 w-full">
+      <div className="min-w-[100px] flex items-center justify-start"> 
+        <div className="font-mono text-md md:text-md font-light opacity-80 tracking-widest text-white/90 min-h-[3rem] flex items-center">
+          {text}
+          <span 
+            className={`inline-block w-1 h-1 md:h-4 bg-white ml-1 transition-opacity duration-200 ${showCursor ? 'opacity-100' : 'opacity-0'}`}
+          ></span>
+        </div>
       </div>
-      <span className="inline-block w-1 h-3 md:h-4 bg-white ml-4 animate-pulse align-middle"></span>
     </div>
   );
 };
@@ -67,6 +103,7 @@ export default function LastoWeb() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); 
   const [isDragging, setIsDragging] = useState(false);
+  
   
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -456,18 +493,39 @@ export default function LastoWeb() {
     event.target.value = '';
   };
 
-  // --- UPLOAD ---
-  const checkStatus = async (id: string, fileName: string) => {
+const checkStatus = async (id: string, fileName: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { headers: { 'Authorization': apiKey } });
-        if (!res.ok) return;
+        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { 
+            headers: { 'Authorization': apiKey } 
+        });
+        
+        if (!res.ok) {
+            if (res.status === 401) {
+                clearInterval(interval);
+                setStatus('Błąd klucza API');
+                setIsProcessing(false);
+            }
+            return;
+        }
+
         const result = await res.json();
+
         if (result.status === 'completed') {
           clearInterval(interval);
+          
           const uniqueId = `${id}-${Date.now()}`;
-          const newItem: HistoryItem = { id: uniqueId, title: fileName, date: new Date().toISOString(), content: result.text, utterances: result.utterances, speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } };
+          const newItem: HistoryItem = { 
+              id: uniqueId, 
+              title: fileName, 
+              date: new Date().toISOString(), 
+              content: result.text, 
+              utterances: result.utterances,
+              speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } 
+          };
+          
           await dbSave(newItem);
+          
           setHistory(prev => {
              const exists = prev.some(item => item.id === uniqueId || item.id.startsWith(id));
              if (exists) return prev; 
@@ -475,31 +533,69 @@ export default function LastoWeb() {
              saveToCloudImmediately(updated);
              return updated;
           });
+          
           setSelectedItem(newItem);
           setIsProcessing(false);
-          setStatus(''); // Reset statusu
-        } else if (result.status === 'error') { clearInterval(interval); setStatus('Błąd AI'); setIsProcessing(false); }
-      } catch (err) { clearInterval(interval); setIsProcessing(false); }
+          setStatus('');
+        } else if (result.status === 'error') { 
+            clearInterval(interval); 
+            setStatus('Błąd przetwarzania AI'); 
+            setIsProcessing(false); 
+        } else {
+            // POPRAWKA: Wcześniej tu było: setStatus(`Przetwarzanie... (${result.status})`);
+            // Teraz wymuszamy czysty tekst, bez dopisków (queued/processing)
+            setStatus('Przetwarzanie');
+        }
+      } catch (err) { 
+          console.warn("Błąd podczas sprawdzania statusu", err);
+      }
     }, 3000);
   };
 
-  const processFile = async (file: File) => {
+const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
-    setStatus('Wysyłanie...'); // Ustawiamy status
+    
+    // Krok 1: Tylko czyste "Wysyłanie..."
+    setStatus('Wysyłanie'); 
+    
     try {
-      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': apiKey }, body: file });
-      const { upload_url } = await uploadRes.json();
-      setStatus('Przetwarzanie AI...');
-      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio_url: upload_url, language_code: 'pl', speaker_labels: true })
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { 
+          method: 'POST', 
+          headers: { 'Authorization': apiKey }, 
+          body: file 
       });
-      const { id } = await transcriptRes.json();
-      checkStatus(id, file.name);
-    } catch (e) { setStatus('Błąd połączenia'); setTimeout(() => setIsProcessing(false), 3000); }
-  };
+      
+      if (!uploadRes.ok) throw new Error("Błąd wysyłania");
+      
+      const { upload_url } = await uploadRes.json();
+      
+      // Tutaj normalnie byłoby "Inicjowanie", ale zmieniamy od razu na docelowy status
+      // żeby loader zaczął już pisać właściwe słowo
+      setStatus('Przetwarzanie');
+      
+      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST', 
+        headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            audio_url: upload_url, 
+            language_code: 'pl', 
+            speaker_labels: true 
+        })
+      });
+      
+      if (!transcriptRes.ok) throw new Error("Błąd startu transkrypcji");
 
+      const { id } = await transcriptRes.json();
+      
+      // Przekazujemy do pętli sprawdzającej
+      checkStatus(id, file.name);
+      
+    } catch (e) { 
+        setStatus('Błąd połączenia'); 
+        setTimeout(() => setIsProcessing(false), 3000); 
+    }
+  };
   const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) processFile(file);
@@ -696,8 +792,8 @@ export default function LastoWeb() {
                 {/* TUTAJ WSTAWIAMY NOWY TYPEWRITER LOADER */}
                 {isProcessing && status ? (
                   <div className="flex flex-col items-center justify-center space-y-2 py-2 animate-in fade-in zoom-in duration-2000">
-                    <TypewriterLoader />
-                    <span className="text-sm font-light tracking-wide text-white/60 animate-pulse">{uploadStatus || status}</span>
+                    <TypewriterLoader message={status}/>
+                    
                   </div>
               ) : !apiKey ? (
                   <button onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} className="btn-primary">Dodaj pierwsze nagranie</button>
