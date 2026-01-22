@@ -74,7 +74,7 @@ const TypewriterLoader = ({ message }: { message: string }) => {
         <div className="font-mono text-md md:text-md font-light opacity-80 tracking-widest text-white/90 min-h-[3rem] flex items-center">
           {text}
           <span 
-            className={`inline-block w-1 h-1 md:h-4 bg-white ml-1 transition-opacity duration-200 ${showCursor ? 'opacity-100' : 'opacity-0'}`}
+            className={`inline-block w-1 h-4 md:h-5 bg-white ml-1 transition-opacity duration-200 ${showCursor ? 'opacity-100' : 'opacity-0'}`}
           ></span>
         </div>
       </div>
@@ -611,7 +611,7 @@ const processFile = async (file: File) => {
       if (isSettingsOpen || selectedItem) return;
       if (e.clipboardData && e.clipboardData.files.length > 0) {
         const file = e.clipboardData.files[0];
-        if (file.type.startsWith('audio/')) { e.preventDefault(); processFile(file); } 
+        if (file.type.startsWith('audio/') || file.type.startsWith('video/')) { e.preventDefault(); processFile(file); } 
         else { setInfoModal({ isOpen: true, title: 'Błąd', message: 'To nie audio.' }); }
       }
     };
@@ -802,10 +802,9 @@ const processFile = async (file: File) => {
                     <div className="flex flex-col items-center gap-4">
                       <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
                         {isDragging ? 'Upuść tutaj!' : 'Dodaj plik audio'}
-                        <input type="file" className="hidden" accept="audio/*" onChange={handleFileInput} />
+                        <input type="file"  className="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.aif,.mov,.mp4,.m4v,.wmv,.avi,.webm" onChange={handleFileInput}  />
                       </label>
                     </div>
-                    <p className="format-hint mt-4 text-[10px] text-gray-500 text-center leading-relaxed opacity-60">PC: Przeciągnij plik tutaj<br/>iOS: Dyktafon → Udostępnij → Zachowaj w plikach</p>
                   </>
                 )}
               </div>
