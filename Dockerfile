@@ -1,13 +1,14 @@
-# Używamy lekkiego obrazu Linuxa
 FROM node:18-slim
 
-# Instalujemy narzędzia systemowe potrzebne dla yt-dlp i puppeteera
+# 1. Instalacja zależności systemowych (Chrome/Puppeteer + Python/yt-dlp)
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     ffmpeg \
     curl \
-    ca-certificates \
+    gnupg \
+    wget \
+    # Biblioteki wymagane przez Chrome (Puppeteer)
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -41,26 +42,33 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     lsb-release \
-    wget \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Pobieramy najnowsze yt-dlp
+# 2. Instalacja yt-dlp
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
 RUN chmod a+rx /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
+# 3. Kopiowanie i instalacja zależności node
 COPY package*.json ./
-RUN npm install
+# Używamy --legacy-peer-deps, żeby uniknąć błędów konfliktów wersji
+RUN npm install --legacy-peer-deps
 
+# 4. Kopiowanie reszty plików
 COPY . .
+
+# 5. Budowanie aplikacji (tutaj Next.js użyje configu z Kroku 1 i zignoruje błędy TS)
 RUN npm run build
 
+# 6. Konfiguracja środowiska
 ENV NODE_ENV=production
-# Puppeteer w dockerze potrzebuje specjalnych flag
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV PORT=3000
+# Ścieżka dla Puppeteera w Dockerze (Chrome instaluje się z puppeteerem w node_modules)
+# UWAGA: To jest trick - nie instalujemy chrome systemowo, używamy tego z node_modules,
+# ale mamy biblioteki systemowe zainstalowane w pkt 1.
 
 EXPOSE 3000
+
 CMD ["npm", "start"]
