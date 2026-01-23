@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import puppeteer from 'puppeteer';
+import { Readable } from 'stream';
 
 export const runtime = 'nodejs';
 
+// Na Macu/Linux wpisz pełną ścieżkę (np. /opt/homebrew/bin/yt-dlp), na Windows wystarczy 'yt-dlp'
 const YT_DLP_PATH = 'yt-dlp'; 
 
 export async function POST(req: Request) {
@@ -14,16 +16,16 @@ export async function POST(req: Request) {
 
     if (!apiKey) return NextResponse.json({ error: 'Brak klucza API' }, { status: 401 });
 
-    console.log(`1. [Smart-Import] Start dla: ${url}`);
+    console.log(`1. [Stream-Import] Start dla: ${url}`);
     
     // --- ŚCIEŻKA 1: YouTube ---
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
         return await handleYoutubeWithYtDlp(url, apiKey, YT_DLP_PATH);
     }
 
-    // --- ŚCIEŻKA 2: Google Drive (Szybka ścieżka bez przeglądarki) ---
+    // --- ŚCIEŻKA 2: Google Drive (Szybka ścieżka) ---
     if (url.includes('drive.google.com')) {
-        console.log("   Wykryto Google Drive - próba szybkiego pobierania...");
+        console.log("   Wykryto Google Drive - próba bezpośredniego strumieniowania...");
         try {
             const idMatch = url.match(/[-\w]{25,}/);
             if (idMatch) {
@@ -33,20 +35,19 @@ export async function POST(req: Request) {
                 const res = await fetch(directUrl);
                 const contentType = res.headers.get('content-type') || '';
                 
-                // Jeśli dostaliśmy plik audio/video/strumień, a nie HTML
-                if (res.ok && (contentType.includes('audio') || contentType.includes('video') || contentType.includes('octet-stream'))) {
-                    console.log("   ✅ Udało się pobrać bezpośrednio z Drive!");
-                    const arrayBuf = await res.arrayBuffer();
-                    return await uploadToAssembly(Buffer.from(arrayBuf), "Nagranie Google Drive", apiKey);
+                if (res.ok && res.body && (contentType.includes('audio') || contentType.includes('video') || contentType.includes('octet-stream'))) {
+                    console.log("   ✅ Rozpoczynam strumieniowanie z Drive do AssemblyAI...");
+                    // Przekazujemy strumień (body) dalej, bez buforowania w RAM
+                    return await uploadStreamToAssembly(res.body, "Nagranie Google Drive", apiKey);
                 }
-                console.log("   ⚠️ Szybkie pobieranie zwróciło HTML. Przełączam na Puppeteer.");
+                console.log("   ⚠️ Bezpośredni link zwrócił HTML/Błąd. Przełączam na Puppeteer.");
             }
         } catch (e) {
             console.warn("   Błąd szybkiej ścieżki Drive:", e);
         }
     }
 
-    // --- ŚCIEŻKA 3: Puppeteer (Wszystkie inne strony + trudny Drive/TapeACall) ---
+    // --- ŚCIEŻKA 3: Puppeteer (Wszystko inne + Trudny Drive) ---
     console.log("   Uruchamianie przeglądarki (Puppeteer)...");
     
     browser = await puppeteer.launch({
@@ -55,43 +56,30 @@ export async function POST(req: Request) {
     });
     
     const page = await browser.newPage();
-    // Udajemy Chrome na Windows dla maksymalnej zgodności
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
     console.log("   Wchodzę na stronę...");
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
 
-    // --- EKSTRAKCJA LINKU (NAPRAWIONE TYPY TYPESCRIPT) ---
+    // Ekstrakcja linku (Ta sama logika co wcześniej)
     const audioSrc = await page.evaluate(() => {
-        // 1. Sprawdź tag <source> wewnątrz <audio> (Dysk Google tak robi)
+        const getSrc = (el: any) => el?.src || el?.href || null;
+
         const audioSource = document.querySelector('audio source');
-        if (audioSource) {
-            const src = (audioSource as HTMLSourceElement).src;
-            if (src) return src;
-        }
+        if (audioSource) return (audioSource as HTMLSourceElement).src;
 
-        // 2. Sprawdź tag <audio> bezpośrednio
         const audio = document.querySelector('audio');
-        if (audio) {
-            const src = (audio as HTMLAudioElement).src;
-            if (src) return src;
-        }
+        if (audio) return (audio as HTMLAudioElement).src;
         
-        // 3. Sprawdź tag <video>
         const video = document.querySelector('video');
-        if (video) {
-            const src = (video as HTMLVideoElement).src;
-            if (src) return src;
-        }
+        if (video) return (video as HTMLVideoElement).src;
 
-        // 4. Szukaj linków "Pobierz" (Anchor tags)
         const links = Array.from(document.querySelectorAll('a'));
         const directLink = links.find(a => {
             const href = (a as HTMLAnchorElement).href || '';
             return (href.includes('export=download') || href.includes('.mp3') || href.includes('.m4a')) 
                 && !href.includes('google.com/url?');
         });
-        
         if (directLink) return (directLink as HTMLAnchorElement).href;
 
         return null;
@@ -100,20 +88,20 @@ export async function POST(req: Request) {
     const pageTitle = await page.title();
 
     if (!audioSrc) {
-        throw new Error('Nie znaleziono pliku audio (sprawdzono audio, source, video i linki).');
+        throw new Error('Nie znaleziono pliku audio na stronie.');
     }
 
-    console.log(`   ✅ Znaleziono link źródłowy: ${audioSrc.substring(0, 60)}...`);
+    console.log(`   ✅ Znaleziono źródło: ${audioSrc.substring(0, 50)}...`);
 
-    // Pobieramy ciasteczka (krytyczne dla Drive, aby utrzymać sesję)
     const cookies = await page.cookies();
     const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
 
     await browser.close();
     browser = null;
 
-    console.log("   Pobieranie pliku z użyciem ciasteczek sesji...");
+    console.log("   Pobieranie strumienia...");
     
+    // Pobieramy plik jako strumień
     const audioRes = await fetch(audioSrc, {
         headers: { 
             'Cookie': cookieString,
@@ -121,18 +109,16 @@ export async function POST(req: Request) {
         }
     });
 
-    if (!audioRes.ok) throw new Error(`Serwer źródłowy odrzucił pobieranie: ${audioRes.status}`);
-    
-    const arrayBuf = await audioRes.arrayBuffer();
-    const audioBuffer = Buffer.from(arrayBuf);
+    if (!audioRes.ok || !audioRes.body) throw new Error(`Serwer źródłowy odrzucił połączenie: ${audioRes.status}`);
 
-    // BRAMKARZ HTML: Sprawdzamy czy nie pobraliśmy strony błędu
-    const header = audioBuffer.subarray(0, 50).toString().trim().toLowerCase();
-    if (header.startsWith('<!doctype') || header.startsWith('<html')) {
-        throw new Error('Pobrano stronę HTML zamiast pliku audio. Link może wymagać interakcji użytkownika (np. skan antywirusowy).');
+    // Sprawdzenie nagłówków (Bramkarz) - tu czytamy tylko nagłówki, nie treść
+    const cType = audioRes.headers.get('content-type') || '';
+    if (cType.includes('text/html')) {
+        throw new Error('Pobrano stronę HTML zamiast pliku audio.');
     }
 
-    return await uploadToAssembly(audioBuffer, pageTitle || 'Import WWW', apiKey);
+    console.log("   ✅ Strumieniowanie do AssemblyAI...");
+    return await uploadStreamToAssembly(audioRes.body, pageTitle || 'Import WWW', apiKey);
 
   } catch (error: any) {
     if (browser) await browser.close();
@@ -141,22 +127,32 @@ export async function POST(req: Request) {
   }
 }
 
-// --- Helper: Upload do AssemblyAI ---
-async function uploadToAssembly(buffer: Buffer, title: string, apiKey: string) {
-    console.log(`2. Upload do AssemblyAI (${(buffer.length / 1024 / 1024).toFixed(2)} MB)...`);
-    
+// --- HELPER: STRUMIENIOWY UPLOAD DO ASSEMBLY ---
+async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Readable | null, title: string, apiKey: string) {
+    if (!stream) throw new Error("Brak strumienia danych.");
+
+    // Konwersja Web Stream na Node Stream (dla kompatybilności)
+    // @ts-ignore
+    const nodeStream = stream.pipe ? stream : Readable.fromWeb(stream);
+
     const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: {
             'Authorization': apiKey,
             'Content-Type': 'application/octet-stream'
         },
-        // Rzutowanie na any, aby uniknąć błędu TS "BodyInit" przy Bufferze w Node.js
-        body: buffer as any
+        body: nodeStream,
+        // @ts-ignore - 'duplex' jest wymagany w nowszych Node.js dla strumieni w fetch
+        duplex: 'half' 
     });
 
-    if (!uploadResponse.ok) throw new Error(await uploadResponse.text());
+    if (!uploadResponse.ok) {
+        const errText = await uploadResponse.text();
+        throw new Error(`Błąd uploadu AssemblyAI: ${errText}`);
+    }
+
     const uploadData = await uploadResponse.json();
+    console.log("   🚀 Upload zakończony sukcesem!");
 
     return NextResponse.json({ 
         uploadUrl: uploadData.upload_url,
@@ -164,25 +160,27 @@ async function uploadToAssembly(buffer: Buffer, title: string, apiKey: string) {
     });
 }
 
-// --- Helper: YouTube (bez zmian) ---
+// --- HELPER: YOUTUBE (Z yt-dlp jako strumień) ---
 async function handleYoutubeWithYtDlp(url: string, apiKey: string, ytPath: string) {
-    const runYtDlp = (args: string[]): Promise<Buffer> => {
-        return new Promise((resolve, reject) => {
-            const process = spawn(ytPath, args);
-            const chunks: Uint8Array[] = [];
-            process.stdout.on('data', (c) => chunks.push(c));
-            process.on('close', () => chunks.length ? resolve(Buffer.concat(chunks)) : resolve(Buffer.from([])));
-        });
-    };
-
+    console.log("   Uruchamianie yt-dlp w trybie strumieniowym...");
+    
+    // Najpierw pobieramy tytuł (szybka operacja)
     let title = 'YouTube Video';
     try {
-        const t = await runYtDlp(['--print', 'title', url]);
-        if(t.length) title = t.toString().trim();
-    } catch(e){}
+        const titleProcess = spawn(ytPath, ['--print', 'title', url]);
+        titleProcess.stdout.on('data', (d) => { title = d.toString().trim(); });
+        await new Promise((resolve) => titleProcess.on('close', resolve));
+    } catch(e) {}
 
-    const audioBuffer = await runYtDlp(['-f', 'bestaudio', '--no-playlist', '-o', '-', url]);
-    if (audioBuffer.length === 0) throw new Error('yt-dlp nie pobrał danych.');
+    // Główny proces - pobieranie audio na stdout
+    const process = spawn(ytPath, [
+        '-f', 'bestaudio/best',
+        '--no-playlist',
+        '-o', '-', // Wypisz na stdout
+        url
+    ]);
 
-    return await uploadToAssembly(audioBuffer, title, apiKey);
+    // Przekierowujemy stdout procesu bezpośrednio do AssemblyAI
+    // Nie czekamy na koniec pobierania!
+    return await uploadStreamToAssembly(process.stdout, title, apiKey);
 }

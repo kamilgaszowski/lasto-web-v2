@@ -142,11 +142,14 @@ export default function LastoWeb() {
     }
   };
 
-  // --- CHECK STATUS (Musi być zdefiniowany przed użyciem w processUrl) ---
-// --- CHECK STATUS (Musi być zdefiniowany przed użyciem w processUrl) ---
+  // --- CHECK STATUS ---
   const checkStatus = async (assemblyId: string, localDbId: string, rawFileName: string, currentApiKey: string) => {
     
-    const fileName = rawFileName.replace(/[^\w\s\-\.ąćęłńóśźżĄĆĘŁŃÓŚŹŻ\(\)]/g, "").trim() || "Nagranie";
+    // UŻYWAMY FUNKCJI USUWAJĄCEJ TYLKO ROZSZERZENIA
+    let fileName = removeExtension(rawFileName);
+    // Usuwamy "Przetwarzanie..." z nazwy, jeśli tam jest (dla wznawianych zadań)
+    fileName = fileName.replace(' (Przetwarzanie...)', '').trim();
+
     console.log(`[TŁO] Start pętli dla DB ID: ${localDbId}`);
 
     const interval = setInterval(async () => {
@@ -162,11 +165,10 @@ export default function LastoWeb() {
 
         const result = await res.json();
 
-        // 1. SUKCES - MAMY TEKST!
+        // 1. SUKCES
         if (result.status === 'completed') {
           clearInterval(interval);
           
-          // Formatowanie tekstu...
           const initialSpeakerMap: Record<string, string> = {};
           let finalContent = "";
 
@@ -194,27 +196,19 @@ export default function LastoWeb() {
               content: finalContent, 
               utterances: [], 
               speakerNames: initialSpeakerMap,
-              isProcessing: false 
+              isProcessing: false,
+              assemblyId: assemblyId // Zachowujemy ID
           };
           
-          // 1. ZAPISUJEMY DO BAZY LOKALNEJ
           await dbSave(finalItem);
-          
-          // 2. ODŚWIEŻAMY WIDOK
           await refreshFromDb();
           
-          // 3. --- NOWOŚĆ: WYMUSZAMY ZAPIS DO PANTRY ---
-          // Pobieramy najnowszą wersję z bazy i wysyłamy do chmury
+          // WYMUSZAMY ZAPIS DO PANTRY
           const allItems = await dbGetAll();
-          // Sortujemy tak samo jak przy wyświetlaniu
           const sorted = allItems.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          
-          // Wywołujemy triggerAutoSave ręcznie, przekazując posortowaną listę
           await triggerAutoSave(sorted);
           
-          console.log("[TŁO] Zapisano do Pantry!");
-
-          // Jeśli użytkownik akurat ma to wybrane, odświeżamy też edytor
+          console.log("[TŁO] Zakończono i wysłano do Pantry!");
           setSelectedItem(prev => prev?.id === localDbId ? finalItem : prev);
           
         } 
@@ -232,7 +226,6 @@ export default function LastoWeb() {
             };
             await dbSave(errorItem);
             await refreshFromDb();
-            // Też wysyłamy do chmury, żeby błąd się zapisał
             const allItems = await dbGetAll();
             await triggerAutoSave(allItems);
         }
@@ -243,20 +236,47 @@ export default function LastoWeb() {
     }, 5000); 
   };
 
-// --- INIT ---
+  // --- INIT ---
   useEffect(() => {
-    setApiKey(localStorage.getItem('assemblyAIKey') || '');
-    const savedPantryId = localStorage.getItem('pantryId') || '';
-    setPantryId(savedPantryId);
+    const initApp = async () => {
+      const savedKey = localStorage.getItem('assemblyAIKey') || '';
+      setApiKey(savedKey);
+      const savedPantryId = localStorage.getItem('pantryId') || '';
+      setPantryId(savedPantryId);
 
-    // Ładujemy dane z bazy przy starcie
-    refreshFromDb();
+      await refreshFromDb();
 
-    if (savedPantryId) {
-        // Opcjonalnie: Załaduj z chmury, ale nie blokuj widoku lokalnego
-        loadFromCloud(true);
-    }
-  }, []);
+      // WZNAWIANIE PRZERWANYCH ZADAŃ
+      const allItems = await dbGetAll();
+      const stuckItems = allItems.filter((i: any) => i.isProcessing);
+
+      if (stuckItems.length > 0 && savedKey) {
+          console.log(`[INIT] Znaleziono ${stuckItems.length} przerwanych zadań. Wznawiam...`);
+          
+          stuckItems.forEach((item: any) => {
+              if (item.assemblyId) {
+                  // Usuwamy "(Przetwarzanie...)" tylko do logiki wznawiania
+                  const rawTitle = item.title.replace(' (Przetwarzanie...)', '');
+                  checkStatus(item.assemblyId, item.id, rawTitle, savedKey);
+              } else {
+                  const fixedItem = { 
+                      ...item, 
+                      isProcessing: false, 
+                      title: item.title.replace(' (Przetwarzanie...)', ' (Błąd)'),
+                      content: "Proces przerwany (brak ID transkrypcji po odświeżeniu)." 
+                  };
+                  dbSave(fixedItem).then(refreshFromDb);
+              }
+          });
+      }
+
+      if (savedPantryId) {
+          loadFromCloud(true);
+      }
+    };
+
+    initApp();
+  }, []); 
 
   // --- KOMPRESJA LOKALNA ---
   const localCompressHistory = (historyData: HistoryItem[]) => {
@@ -465,20 +485,22 @@ export default function LastoWeb() {
              const remoteHistory = localDecompressHistory(remoteCompressed);
              const sortedRemote = remoteHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-             // UWAGA: Tu też używamy bazy jako źródła
              const currentLocalItems = await dbGetAll();
+             
+             // ZABEZPIECZENIE: Nie nadpisujemy zadań, które są w toku
              const processingItems = currentLocalItems.filter(item => item.isProcessing);
-            
-             for (const item of currentLocalItems) { await dbDelete(item); }
-             for (const item of processingItems) { await dbSave(item); }
-             for (const item of sortedRemote) { await dbSave(item); }
 
+             for (const item of currentLocalItems) { await dbDelete(item); }
+             
+             // Przywracamy te, co się mieliły
+             for (const item of processingItems) { await dbSave(item); }
+
+             // Zapisujemy resztę z chmury
              for (const item of sortedRemote) { 
-    // Jeśli ID z chmury koliduje z procesującym się plikiem, to ignorujemy chmurę na rzecz lokalnego procesu
-    if (!processingItems.find(p => p.id === item.id)) {
-        await dbSave(item); 
-    }
-}
+                 if (!processingItems.find(p => p.id === item.id)) {
+                     await dbSave(item); 
+                 }
+             }
 
              await refreshFromDb();
 
@@ -505,7 +527,6 @@ export default function LastoWeb() {
 
   // --- ACTIONS: ZAPIS TEKSTU ---
   const performSaveText = (itemId: string, textToSave: string) => {
-      // Pobieramy aktualny stan z bazy, żeby nie nadpisać czegoś starego
       dbGetAll().then(currentHistory => {
           const itemIndex = currentHistory.findIndex(i => i.id === itemId);
           if (itemIndex === -1) return;
@@ -519,8 +540,8 @@ export default function LastoWeb() {
           };
 
           dbSave(finalItemToSave).then(() => {
-              refreshFromDb(); // Odświeżamy widok po zapisie
-              triggerAutoSave(); // Wyślij do chmury (opcjonalnie całą listę)
+              refreshFromDb(); 
+              triggerAutoSave(); 
           });
 
           if (selectedItemRef.current?.id === itemId) {
@@ -549,7 +570,6 @@ export default function LastoWeb() {
         date: new Date().toISOString() 
     };
 
-    // Aktualizujemy tylko lokalny stan edytora dla płynności
     setSelectedItem(updatedItem); 
     
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -567,18 +587,19 @@ export default function LastoWeb() {
       }
   };
 
-  // --- PROCESS FILE / URL ---
- 
-const processFile = async (file: File) => {
+  // --- PROCESS FILE ---
+  const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
     setStatus('Wysyłanie pliku...');
 
-    // 1. WPIS TYMCZASOWY OD RAZU
+    // UŻYCIE FUNKCJI POMOCNICZEJ
+    const cleanTitle = removeExtension(file.name); 
+
     const tempId = `file-pending-${Date.now()}`;
     const tempItem: HistoryItem = {
         id: tempId,
-        title: `${file.name} (Przetwarzanie...)`,
+        title: `${cleanTitle} (Przetwarzanie...)`,
         date: new Date().toISOString(),
         content: "Trwa transkrypcja w tle...",
         utterances: [],
@@ -590,15 +611,13 @@ const processFile = async (file: File) => {
     await refreshFromDb(); 
 
     try {
-      // 2. UPLOAD PLIKU (BEZ FormData!)
-      // AssemblyAI wymaga surowego pliku w body
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: { 
             'Authorization': apiKey,
-            'Content-Type': 'application/octet-stream' // Kluczowa zmiana
+            'Content-Type': 'application/octet-stream'
         },
-        body: file // Wysyłamy plik bezpośrednio, nie przez FormData
+        body: file
       });
 
       if (!uploadRes.ok) {
@@ -610,7 +629,6 @@ const processFile = async (file: File) => {
 
       setStatus('Zlecanie transkrypcji...');
 
-      // 3. Start transkrypcji
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
         headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
@@ -621,18 +639,16 @@ const processFile = async (file: File) => {
         })
       });
 
-      if (!transcriptRes.ok) throw new Error("Błąd startu transkrypcji");
+      if (!transcriptRes.ok) throw new Error("Błąd startu");
       const { id } = await transcriptRes.json();
 
-      // --- ZAPISUJEMY ID ASSEMBLY DO BAZY (DLA WZNAWIANIA) ---
       const processingItem = { ...tempItem, assemblyId: id };
       await dbSave(processingItem);
 
       setIsProcessing(false); 
       setStatus('');
 
-      // Przekazujemy pałeczkę
-      checkStatus(id, tempId, file.name, apiKey);
+      checkStatus(id, tempId, cleanTitle, apiKey);
 
     } catch (e: any) {
       console.error(e);
@@ -648,8 +664,8 @@ const processFile = async (file: File) => {
     }
   };
  
-
-const processUrl = async () => {
+  // --- PROCESS URL ---
+  const processUrl = async () => {
     if (!apiKey || !importUrl.trim()) return;
     
     const urlToProcess = importUrl.trim();
@@ -658,7 +674,6 @@ const processUrl = async () => {
     setStatus('Inicjowanie...');
 
     const tempId = `pending-${Date.now()}`;
-    // Tworzymy obiekt - na razie bez assemblyId
     const tempItem: HistoryItem = {
         id: tempId,
         title: "Pobieranie...",
@@ -677,9 +692,9 @@ const processUrl = async () => {
       let videoTitle = 'Import z linku';
       const isYoutube = urlToProcess.includes('youtube.com') || urlToProcess.includes('youtu.be');
 
-      if (isYoutube) {
+      if (isYoutube || urlToProcess.includes('drive.google.com')) {
         setStatus('Pobieranie audio...');
-        tempItem.title = "Pobieranie z YouTube...";
+        tempItem.title = "Pobieranie danych...";
         await dbSave(tempItem);
         refreshFromDb();
 
@@ -693,7 +708,10 @@ const processUrl = async () => {
         
         const ytData = await ytRes.json();
         finalAudioUrl = ytData.uploadUrl; 
-        videoTitle = ytData.title || 'Import z YouTube';
+        
+        // UŻYCIE FUNKCJI POMOCNICZEJ
+        let rawTitle = ytData.title || 'Import z Internetu';
+        videoTitle = removeExtension(rawTitle);
         
         tempItem.title = `${videoTitle} (Przetwarzanie...)`;
         await dbSave(tempItem);
@@ -713,10 +731,8 @@ const processUrl = async () => {
       });
       
       if (!transcriptRes.ok) throw new Error("Błąd AssemblyAI");
-      const { id } = await transcriptRes.json(); // To jest AssemblyID
+      const { id } = await transcriptRes.json();
 
-      // --- KLUCZOWA ZMIANA: ZAPISUJEMY ASSEMBLY ID DO BAZY ---
-      // Dzięki temu po odświeżeniu wiemy co sprawdzać
       const processingItem = { ...tempItem, assemblyId: id };
       await dbSave(processingItem);
       
@@ -764,7 +780,7 @@ const processUrl = async () => {
   const updateAndSave = async (updatedItem: HistoryItem) => {
       const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
       await dbSave(itemWithNewDate);
-      await refreshFromDb(); // Odśwież widok z bazy
+      await refreshFromDb(); 
       setSelectedItem(itemWithNewDate);
       triggerAutoSave(); 
   };
@@ -967,7 +983,7 @@ const handleAddSpeaker = (name: string) => {
     setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
-        await refreshFromDb(); // Odśwież z bazy zamiast filtrować history
+        await refreshFromDb(); 
         triggerAutoSave(); 
 
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
@@ -983,7 +999,7 @@ const handleAddSpeaker = (name: string) => {
         const allItems = await dbGetAll();
         for (const item of allItems) await dbDelete(item);
         
-        await refreshFromDb(); // Baza pusta -> stan pusty
+        await refreshFromDb(); 
         setSelectedItem(null);
         await triggerAutoSave([]); 
 
@@ -1335,6 +1351,22 @@ const SpeakerRenameInput = ({
       placeholder="Nazwa..." 
     />
   );
+};
+
+// --- HELPER: USUWANIE ROZSZERZENIA ---
+const removeExtension = (filename: string) => {
+  if (!filename) return "";
+  
+  // Lista rozszerzeń, które faktycznie chcemy usunąć
+  const extensions = [
+    "mp3", "wav", "m4a", "flac", "ogg", "aac", "wma", "aiff", "aif",
+    "mov", "mp4", "m4v", "wmv", "avi", "webm", "3gp", "mkv"
+  ];
+  
+  // Tworzymy regex: /\.(mp3|wav|...)$/i
+  const regex = new RegExp(`\\.(${extensions.join('|')})$`, 'i');
+  
+  return filename.replace(regex, '');
 };
 
 // --- FUNKCJA CZYSZCZĄCA TEKST ---
