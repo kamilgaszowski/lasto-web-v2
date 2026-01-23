@@ -1144,7 +1144,7 @@ const handleAddSpeaker = (name: string) => {
                                 value={importUrl}
                                 onChange={(e) => setImportUrl(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && processUrl()}
-                                placeholder="YouTube, MP3 URL..."
+                                placeholder="Wklej link z YouTube"
                                 className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 focus:border-white/30 focus:bg-white/10 transition-all outline-none"
                             />
                         </div>
