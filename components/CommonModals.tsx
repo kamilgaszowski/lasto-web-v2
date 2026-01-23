@@ -1,17 +1,22 @@
 import React, { useEffect, useRef } from 'react';
-import { CloseIcon } from './Icons'; // Upewnij się, że ścieżka do ikon jest poprawna
+import { CloseIcon } from './Icons'; 
 
-// --- MODAL USUWANIA (Z Obsługą Loading) ---
+// --- MODAL USUWANIA / POTWIERDZENIA ---
 interface DeleteModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
   title?: string;
-  isLoading?: boolean; // Nowy prop
+  header?: string;       // NOWE: Możliwość zmiany nagłówka (np. "Scalanie")
+  confirmLabel?: string; // NOWE: Możliwość zmiany napisu na przycisku
+  isLoading?: boolean;
 }
 
-export const DeleteModal = ({ isOpen, onClose, onConfirm, title, isLoading }: DeleteModalProps) => {
+export const DeleteModal = ({ isOpen, onClose, onConfirm, title, header, confirmLabel, isLoading }: DeleteModalProps) => {
   if (!isOpen) return null;
+
+  const defaultHeader = "Usuń element";
+  const defaultConfirm = "Usuń (Enter)";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={!isLoading ? onClose : undefined}>
@@ -20,9 +25,10 @@ export const DeleteModal = ({ isOpen, onClose, onConfirm, title, isLoading }: De
           <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
             <CloseIcon />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Usuń nagranie</h3>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{header || defaultHeader}</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Czy na pewno chcesz usunąć {title ? <span className="font-bold text-gray-800 dark:text-gray-200">"{title}"</span> : "ten element"}?
+            Czy na pewno chcesz wykonać akcję dla: <br/>
+            {title ? <span className="font-bold text-gray-800 dark:text-gray-200">"{title}"</span> : "tego elementu"}?
             <br />Tej operacji nie można cofnąć.
           </p>
         </div>
@@ -46,10 +52,10 @@ export const DeleteModal = ({ isOpen, onClose, onConfirm, title, isLoading }: De
             {isLoading ? (
               <>
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"/>
-                Usuwanie...
+                Przetwarzanie...
               </>
             ) : (
-              'Usuń (Enter)'
+              confirmLabel || defaultConfirm
             )}
           </button>
         </div>
@@ -81,9 +87,7 @@ export const InfoModal = ({ isOpen, title, message, onClose }: InfoModalProps) =
   );
 };
 
-// --- POZOSTAŁE MODALE (AddSpeaker) ---
-
-
+// --- ADD SPEAKER MODAL ---
 interface AddSpeakerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -111,5 +115,3 @@ export const AddSpeakerModal = ({ isOpen, onClose, onConfirm }: AddSpeakerModalP
     </div>
   );
 };
-
-

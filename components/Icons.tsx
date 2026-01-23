@@ -65,3 +65,34 @@ export const MergeIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
   </svg>
 );
+
+// --- src/components/Icons.tsx ---
+
+// Ikonka "Edycja Tekstu" (Wygląda jak kursor tekstowy / belka)
+export const IconTextMode = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </svg>
+);
+// LUB WERSJA PROSTSZA (Kursor I-beam):
+// export const IconTextMode = () => (
+//   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+//     <path d="M8 4v16" opacity="0.4"/>
+//     <path d="M16 4v16" opacity="0.4"/>
+//     <path d="M12 4v16" strokeWidth="3" />
+//     <path d="M8 4h8" />
+//     <path d="M8 20h8" />
+//   </svg>
+// );
+
+
+// Ikonka "Nowy Rozmówca" (Głowa / Postać)
+export const IconSpeakerMode = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+    {/* Opcjonalnie: mały dymek lub plusik obok głowy, żeby sugerował dodawanie */}
+    <path d="M19 8v6" strokeWidth="1.5" /> 
+    <path d="M16 11h6" strokeWidth="1.5" />
+  </svg>
+);
