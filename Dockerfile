@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:20-slim
 
 # 1. Instalacja zależności systemowych (Chrome/Puppeteer + Python/yt-dlp)
 RUN apt-get update && apt-get install -y \
