@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import ytdl from 'ytdl-core'; // Wymaga: npm install ytdl-core
+import ytdl from 'ytdl-core'; // Biblioteka JS do YouTube
+import { Readable } from 'stream';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60; 
+export const maxDuration = 60; // Maksymalny czas dla Vercel Pro (Hobby ma 10s)
 
 export async function POST(req: Request) {
   try {
@@ -11,91 +12,96 @@ export async function POST(req: Request) {
 
     if (!apiKey) return NextResponse.json({ error: 'Brak klucza API' }, { status: 401 });
 
-    console.log(`1. [Vercel-Friendly] Start dla: ${url}`);
+    console.log(`1. [Vercel-Stream] Start dla: ${url}`);
 
-    // --- ŚCIEŻKA 1: YouTube (ytdl-core) ---
-    // To rozwiązanie działa w Node.js bez zewnętrznych binarek (yt-dlp)
+    // --- ŚCIEŻKA 1: YouTube (Czysty Node.js) ---
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
         if (!ytdl.validateURL(url)) {
-            throw new Error('Nieprawidłowy link YouTube');
+            throw new Error('Nieprawidłowy URL YouTube');
         }
 
-        console.log("   Pobieranie informacji o wideo...");
+        console.log("   Pobieranie informacji o wideo (ytdl)...");
+        // 1. Pobieramy informacje o wideo
         const info = await ytdl.getInfo(url);
-        
-        // Wybieramy format audio (najlepiej mp4/audio)
+        const title = info.videoDetails.title || 'YouTube Video';
+
+        // 2. Wybieramy format audio
         const format = ytdl.chooseFormat(info.formats, { 
-            quality: 'highestaudio',
+            quality: 'highestaudio', 
             filter: 'audioonly' 
         });
 
-        if (!format || !format.url) {
-            throw new Error('Nie znaleziono strumienia audio dla tego filmu.');
-        }
+        if (!format) throw new Error('Nie znaleziono ścieżki audio.');
 
-        console.log("   ✅ Znaleziono bezpośredni link audio!");
-        
-        // Zamiast pobierać plik do nas, wysyłamy link bezpośrednio do AssemblyAI!
-        // AssemblyAI potrafi pobrać plik z publicznego URL.
-        const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-            method: 'POST',
-            headers: { 
-                'Authorization': apiKey, 
-                'Content-Type': 'application/json' 
-            },
-            body: JSON.stringify({ 
-                audio_url: format.url, // Podajemy link do strumienia Google
-                language_code: 'pl', 
-                speaker_labels: true 
-            })
-        });
+        console.log(`   Start strumieniowania: ${title}`);
 
-        if (!transcriptRes.ok) {
-            const err = await transcriptRes.json();
-            throw new Error(`AssemblyAI Error: ${err.error}`);
-        }
+        // 3. Pobieramy strumień prosto z YouTube
+        const ytStream = ytdl.downloadFromInfo(info, { format: format });
 
-        const transcriptData = await transcriptRes.json();
-        
-        // Zwracamy ID transkrypcji, ale udajemy strukturę uploadu, żeby frontend się nie pogubił
-        // (Frontend oczekuje uploadUrl, ale tutaj od razu zleciliśmy transkrypcję)
-        // Musimy to obsłużyć sprytnie: zwracamy specjalny sygnał.
-        
-        // UWAGA: To wymaga małej zmiany na frontendzie lub tutaj "oszukujemy".
-        // Ponieważ Twój frontend w processUrl robi: 
-        // 1. /api/get-youtube-stream -> dostaje uploadUrl
-        // 2. /transcript -> zleca transkrypcję z tym URL
-        
-        // Żeby nie zmieniać frontendu, musimy zwrócić ten URL do audio.
-        return NextResponse.json({ 
-            uploadUrl: format.url,
-            title: info.videoDetails.title
-        });
+        // 4. Wysyłamy strumień prosto do AssemblyAI
+        return await uploadStreamToAssembly(ytStream, title, apiKey);
     }
 
-    // --- ŚCIEŻKA 2: Inne strony (Proxy) ---
-    // Na Vercel nie odpalisz Puppeteera w wersji Hobby łatwo.
-    // Dla Google Drive spróbujmy po prostu linku bezpośredniego.
+    // --- ŚCIEŻKA 2: Google Drive (Bezpośredni link) ---
     if (url.includes('drive.google.com')) {
-         const idMatch = url.match(/[-\w]{25,}/);
-         if (idMatch) {
-             const fileId = idMatch[0];
-             const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-             // Sprawdźmy czy to działa
-             const check = await fetch(directUrl, { method: 'HEAD' });
-             if (check.ok) {
-                 return NextResponse.json({ 
-                    uploadUrl: directUrl, 
-                    title: "Google Drive Audio" 
-                 });
-             }
-         }
+        console.log("   Google Drive...");
+        const idMatch = url.match(/[-\w]{25,}/);
+        if (idMatch) {
+            const fileId = idMatch[0];
+            const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+            
+            const res = await fetch(directUrl);
+            // Jeśli to plik audio, przesyłamy go dalej
+            if (res.ok && res.body) {
+                const contentType = res.headers.get('content-type') || '';
+                if (contentType.includes('audio') || contentType.includes('video') || contentType.includes('octet-stream')) {
+                     return await uploadStreamToAssembly(res.body, "Nagranie Google Drive", apiKey);
+                }
+            }
+        }
+        throw new Error("Nie udało się pobrać pliku z Google Drive (może wymagać logowania/skanowania). Pobierz plik na dysk i wgraj ręcznie.");
     }
 
-    throw new Error("Ten typ linku nie jest obsługiwany na serwerze Vercel (wymaga yt-dlp/puppeteer). Spróbuj pobrać plik ręcznie i użyć 'Wgraj plik'.");
+    // --- INNE STRONY ---
+    throw new Error("Na serwerze Vercel obsługiwane są tylko linki YouTube i bezpośrednie pliki Google Drive. Dla innych serwisów pobierz plik i użyj opcji 'Wgraj plik'.");
 
   } catch (error: any) {
     console.error('Błąd Backend:', error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+}
+
+// --- HELPER: STRUMIENIOWY UPLOAD DO ASSEMBLY ---
+async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Readable | null, title: string, apiKey: string) {
+    if (!stream) throw new Error("Brak strumienia danych.");
+
+    // Konwersja dla kompatybilności
+    // @ts-ignore
+    const nodeStream = stream.pipe ? stream : Readable.fromWeb(stream);
+
+    console.log("   Wysyłanie do AssemblyAI...");
+
+    const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+            'Authorization': apiKey,
+            'Content-Type': 'application/octet-stream'
+        },
+        body: nodeStream as any, // 'as any' naprawia błąd kompilacji TS
+        // @ts-ignore
+        duplex: 'half' 
+    });
+
+    if (!uploadResponse.ok) {
+        const errText = await uploadResponse.text();
+        throw new Error(`Błąd AssemblyAI: ${errText}`);
+    }
+
+    const uploadData = await uploadResponse.json();
+    console.log("   ✅ Upload zakończony!");
+
+    return NextResponse.json({ 
+        uploadUrl: uploadData.upload_url,
+        title: title
+    });
 }
