@@ -61,8 +61,9 @@ export async function POST(req: Request) {
     console.log("   Wchodzę na stronę...");
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
 
-    // Ekstrakcja linku (Ta sama logika co wcześniej)
+    // Ekstrakcja linku
     const audioSrc = await page.evaluate(() => {
+        // Helper
         const getSrc = (el: any) => el?.src || el?.href || null;
 
         const audioSource = document.querySelector('audio source');
@@ -111,7 +112,6 @@ export async function POST(req: Request) {
 
     if (!audioRes.ok || !audioRes.body) throw new Error(`Serwer źródłowy odrzucił połączenie: ${audioRes.status}`);
 
-    // Sprawdzenie nagłówków (Bramkarz) - tu czytamy tylko nagłówki, nie treść
     const cType = audioRes.headers.get('content-type') || '';
     if (cType.includes('text/html')) {
         throw new Error('Pobrano stronę HTML zamiast pliku audio.');
@@ -141,7 +141,8 @@ async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Reada
             'Authorization': apiKey,
             'Content-Type': 'application/octet-stream'
         },
-        body: nodeStream,
+        // TU BYŁ BŁĄD: Dodajemy 'as any', żeby TypeScript nie krzyczał o typy Readable vs BodyInit
+        body: nodeStream as any, 
         // @ts-ignore - 'duplex' jest wymagany w nowszych Node.js dla strumieni w fetch
         duplex: 'half' 
     });
@@ -160,11 +161,10 @@ async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Reada
     });
 }
 
-// --- HELPER: YOUTUBE (Z yt-dlp jako strumień) ---
+// --- HELPER: YOUTUBE ---
 async function handleYoutubeWithYtDlp(url: string, apiKey: string, ytPath: string) {
     console.log("   Uruchamianie yt-dlp w trybie strumieniowym...");
     
-    // Najpierw pobieramy tytuł (szybka operacja)
     let title = 'YouTube Video';
     try {
         const titleProcess = spawn(ytPath, ['--print', 'title', url]);
@@ -172,15 +172,12 @@ async function handleYoutubeWithYtDlp(url: string, apiKey: string, ytPath: strin
         await new Promise((resolve) => titleProcess.on('close', resolve));
     } catch(e) {}
 
-    // Główny proces - pobieranie audio na stdout
     const process = spawn(ytPath, [
         '-f', 'bestaudio/best',
         '--no-playlist',
-        '-o', '-', // Wypisz na stdout
+        '-o', '-', 
         url
     ]);
 
-    // Przekierowujemy stdout procesu bezpośrednio do AssemblyAI
-    // Nie czekamy na koniec pobierania!
     return await uploadStreamToAssembly(process.stdout, title, apiKey);
 }
