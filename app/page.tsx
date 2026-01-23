@@ -1128,8 +1128,8 @@ const handleAddSpeaker = (name: string) => {
                       <input type="file"  className="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.aif,.mov,.mp4,.m4v,.wmv,.avi,.webm" onChange={handleFileInput}  />
                     </label>
 
-                    <div className="flex items-center gap-3 w-full opacity-30">
-                        <div className="h-px bg-white flex-1"></div>
+                   {/* <div className="flex items-center gap-3 w-full opacity-30">
+                       <div className="h-px bg-white flex-1"></div>
                         <span className="text-xs uppercase tracking-widest font-light">LUB Z LINKU</span>
                         <div className="h-px bg-white flex-1"></div>
                     </div>
@@ -1139,13 +1139,14 @@ const handleAddSpeaker = (name: string) => {
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                                 <LinkIcon />
                             </div>
-                            <input 
-                                type="text" 
-                                value={importUrl}
-                                onChange={(e) => setImportUrl(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && processUrl()}
-                                placeholder="Wklej link z YouTube"
-                                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 focus:border-white/30 focus:bg-white/10 transition-all outline-none"
+                            
+                           // <input 
+                              type="text" 
+                               value={importUrl}
+                               onChange={(e) => setImportUrl(e.target.value)}
+                               onKeyDown={(e) => e.key === 'Enter' && processUrl()}
+                               placeholder="Wklej link z YouTube"
+                               className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 focus:border-white/30 focus:bg-white/10 transition-all outline-none"
                             />
                         </div>
                         <button 
@@ -1155,7 +1156,7 @@ const handleAddSpeaker = (name: string) => {
                         >
                             Wczytaj
                         </button>
-                    </div>
+                    </div>*/}
 
                   </div>
                 )}
