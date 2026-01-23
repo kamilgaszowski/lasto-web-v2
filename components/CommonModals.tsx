@@ -33,7 +33,7 @@ export const DeleteModal = ({ isOpen, onClose, onConfirm, title, isLoading }: De
             disabled={isLoading}
             className="flex-1 py-2.5 px-4 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
           >
-            Anuluj (Esc)
+            Anuluj
           </button>
           <button 
             onClick={onConfirm} 
@@ -74,17 +74,15 @@ export const InfoModal = ({ isOpen, title, message, onClose }: InfoModalProps) =
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
         <p className="text-sm text-gray-500 dark:text-gray-400">{message}</p>
         <button onClick={onClose} className="w-full py-2.5 bg-gray-900 dark:bg-white text-white dark:text-black rounded-xl text-sm font-medium hover:opacity-90 transition-opacity">
-          OK (Enter)
+          OK
         </button>
       </div>
     </div>
   );
 };
 
-// --- POZOSTAŁE MODALE (AddSpeaker, Merge) ---
-// (Tutaj wklej resztę swoich modali AddSpeakerModal i MergeModal bez zmian, 
-//  lub upewnij się, że plik zawiera ich definicje jeśli masz je oddzielnie)
-// Poniżej skrócone definicje dla kompletności pliku, jeśli ich nie masz:
+// --- POZOSTAŁE MODALE (AddSpeaker) ---
+
 
 interface AddSpeakerModalProps {
   isOpen: boolean;
@@ -114,38 +112,4 @@ export const AddSpeakerModal = ({ isOpen, onClose, onConfirm }: AddSpeakerModalP
   );
 };
 
-interface MergeModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: (s: string, t: string) => void;
-  speakers: string[];
-  getSpeakerName: (k: string) => string;
-}
 
-export const MergeModal = ({ isOpen, onClose, onConfirm, speakers, getSpeakerName }: MergeModalProps) => {
-  const [source, setSource] = React.useState(speakers[0] || '');
-  const [target, setTarget] = React.useState(speakers[1] || '');
-
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 w-full max-w-sm rounded-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-bold text-white">Scal rozmówców</h3>
-        <div className="space-y-2">
-          <p className="text-xs text-gray-500">Zmień wszystkie wypowiedzi:</p>
-          <select className="w-full p-3 bg-black border border-gray-700 rounded-xl text-white" value={source} onChange={e => setSource(e.target.value)}>
-            {speakers.map(s => <option key={s} value={s}>{getSpeakerName(s) || s}</option>)}
-          </select>
-          <p className="text-xs text-gray-500">na:</p>
-          <select className="w-full p-3 bg-black border border-gray-700 rounded-xl text-white" value={target} onChange={e => setTarget(e.target.value)}>
-            {speakers.map(s => <option key={s} value={s}>{getSpeakerName(s) || s}</option>)}
-          </select>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2 rounded-xl bg-gray-800 text-gray-400">Anuluj</button>
-          <button onClick={() => onConfirm(source, target)} className="flex-1 py-2 rounded-xl bg-white text-black font-bold">Scal</button>
-        </div>
-      </div>
-    </div>
-  );
-};

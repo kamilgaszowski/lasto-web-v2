@@ -5,7 +5,7 @@ import './lasto.css';
 
 // Importy Komponentów
 import { RuneArrowLeft, RuneArrowRight, SettingsIcon, EditIcon, CheckIcon, CloseIcon, TrashIcon, IconCopy } from '../components/Icons';
-import { DeleteModal, InfoModal, AddSpeakerModal, MergeModal } from '../components/CommonModals';
+import { DeleteModal, InfoModal, AddSpeakerModal } from '../components/CommonModals';
 import { SettingsModal } from '../components/SettingsModal';
 import { ContextMenu } from '../components/ContextMenu';
 
@@ -32,13 +32,13 @@ const TypewriterLoader = ({ message }: { message: string }) => {
     // Jeśli napisaliśmy całe słowo -> Czekamy chwilę i ZACZYNAMY KASOWAĆ (żeby zrobić pętlę)
     else if (text === message && !isDeleting.current) {
        isDeleting.current = true;
-       speed = 700; // Długa pauza, żeby użytkownik przeczytał komunikat
+       speed = 600; // Długa pauza, żeby użytkownik przeczytał komunikat
     }
     // 3. PUSTY TEKST (PĘTLA):
     // Jeśli skasowaliśmy wszystko -> Czekamy chwilę i ZACZYNAMY PISAĆ OD NOWA
     else if (text.length === 0 && isDeleting.current) {
        isDeleting.current = false;
-       speed = 700; // Krótka pauza przed ponownym pisaniem
+       speed = 200; // Krótka pauza przed ponownym pisaniem
     }
     // 4. KASOWANIE W TRAKCIE
     else if (isDeleting.current) {
@@ -88,6 +88,7 @@ export default function LastoWeb() {
   const [pantryId, setPantryId] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
+  const lastCursorPos = useRef<number>(0);
   
   // Refy
   const selectedItemRef = useRef<HistoryItem | null>(null);
@@ -110,7 +111,6 @@ export default function LastoWeb() {
   const [infoModal, setInfoModal] = useState<{ isOpen: boolean; title: string; message: string }>({ isOpen: false, title: '', message: '' });
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false); 
   const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isAddSpeakerModalOpen, setIsAddSpeakerModalOpen] = useState(false);
   
   const [itemToDelete, setItemToDelete] = useState<HistoryItem | null>(null);
@@ -181,12 +181,11 @@ export default function LastoWeb() {
             if (e.key === 'Enter') confirmSpeakerDeletion();
             if (e.key === 'Escape') setSpeakerToDelete(null);
         }
-        if (isMergeModalOpen && e.key === 'Escape') setIsMergeModalOpen(false);
         if (isSettingsOpen && e.key === 'Escape') setIsSettingsOpen(false);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isProcessing, infoModal.isOpen, isDeleteModalOpen, isDeleteAllModalOpen, speakerToDelete, isMergeModalOpen, isSettingsOpen]);
+  }, [isProcessing, infoModal.isOpen, isDeleteModalOpen, isDeleteAllModalOpen, speakerToDelete, isSettingsOpen]);
 
   // --- INIT ---
   useEffect(() => {
@@ -223,32 +222,56 @@ export default function LastoWeb() {
   }, [contextMenu]);
 
   // --- HELPERS ---
-  const getAllSpeakers = () => {
+// Zastąp starą funkcję tą wersją:
+ const getAllSpeakers = () => {
     if (!selectedItem) return [];
-    const fromTranscript = selectedItem.utterances?.map(u => u.speaker) || [];
-    const fromNames = Object.keys(selectedItem.speakerNames || {});
-    return Array.from(new Set([...fromTranscript, ...fromNames])).sort();
+
+    // 1. Pobieramy znane ID z bazy (np. "A", "B", "SPK_1")
+    const knownIds = Object.keys(selectedItem.speakerNames || {});
+    const knownNames = Object.values(selectedItem.speakerNames || {});
+
+    // 2. Skanujemy tekst w poszukiwaniu nazw (np. "MAREK", "JACEK")
+    const text = getDisplayText(selectedItem);
+    const regex = /^([^\n:]+):/gm;
+    const foundNamesInText = new Set<string>();
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const name = match[1].trim();
+        // Jeśli ta nazwa NIE jest jeszcze przypisana do żadnego ID, dodajemy ją
+        if (!knownNames.includes(name) && name.length < 50) {
+            foundNamesInText.add(name);
+        }
+    }
+    // 3. Zwracamy listę: Znane ID + Nazwy z tekstu (które nie mają jeszcze ID)
+    return Array.from(new Set([...knownIds, ...foundNamesInText])).sort();
   };
 
-  const getSpeakerName = (key: string): string => {
-    if (selectedItem?.speakerNames && selectedItem.speakerNames[key]) return selectedItem.speakerNames[key];
-    return "";
-  };
-
-  const getDisplayText = (item: HistoryItem) => {
-    if (!item.utterances || item.utterances.length === 0) return item.content || "";
+const getSpeakerName = (id: string): string => {
+    if (!selectedItem) return id;
+    // Jeśli mamy to ID w bazie, zwracamy przypisaną nazwę
+    if (selectedItem.speakerNames && selectedItem.speakerNames[id]) {
+        return selectedItem.speakerNames[id];
+    }
+    // Jeśli to jest ID z AssemblyAI, a nie mamy go w bazie, zwracamy domyślną nazwę
+    if (id === 'A') return 'Speaker A';
+    if (id === 'B') return 'Speaker B';
     
-    const isJunk = (text: string, index: number) => {
-        const badWords = ["prosimy", "poczekać", "połączenie", "kontynuować", "wkrótce", "rozmowę"];
-        const lowerText = text.toLowerCase();
-        if (index < 2) return badWords.some(word => lowerText.includes(word));
-        return false;
-    };
-    return item.utterances.filter((u, index) => !isJunk(u.text, index)).map(u => {
-        const speakerKey = (u.speaker === 'A' || u.speaker === '1') ? 'A' : 'B'; 
-        const name = item.speakerNames?.[speakerKey] || item.speakerNames?.[u.speaker] || u.speaker;
-        return `${name.toUpperCase()}:\n${u.text}\n`;
-    }).join('\n');
+    // Jeśli ID nie ma w bazie, to znaczy że nazwa jest samym ID (przypadek ręcznie dopisanego w tekście)
+    return id;
+  };
+
+// Zastąp starą funkcję tą wersją:
+  const getDisplayText = (item: HistoryItem) => {
+    // Po prostu zwracamy treść. To kluczowe dla stabilności edycji.
+    // Jeśli treść jest pusta, a mamy utterances (świeży plik), to jednorazowo budujemy tekst
+    if (!item.content && item.utterances && item.utterances.length > 0) {
+        return item.utterances.map(u => {
+            // Domyślne formatowanie przy pierwszym ładowaniu
+            const speaker = u.speaker === 'A' ? 'ROZMÓWCA A' : (u.speaker === 'B' ? 'ROZMÓWCA B' : u.speaker);
+            return `${speaker}:\n${u.text}\n`;
+        }).join('\n');
+    }
+    return item.content || "";
   };
 
   // --- CLOUD SYNC ---
@@ -430,7 +453,12 @@ export default function LastoWeb() {
           return sortedHistory;
       });
   };
-
+// Aktualizuje pozycję kursora, kiedy użytkownik klika lub pisze w edytorze
+  const handleCursorActivity = () => {
+    if (textareaRef.current) {
+      lastCursorPos.current = textareaRef.current.selectionStart;
+    }
+  };
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
     
@@ -511,17 +539,46 @@ const checkStatus = async (id: string, fileName: string) => {
 
         const result = await res.json();
 
-        if (result.status === 'completed') {
+       
+if (result.status === 'completed') {
           clearInterval(interval);
           
           const uniqueId = `${id}-${Date.now()}`;
+          
+          // 1. Mapa Nazw: Przypisujemy ID z Assembly (A, B) do ładnych nazw
+          const initialSpeakerMap: Record<string, string> = {};
+          
+          // 2. Budujemy treść
+          let finalContent = "";
+
+          if (result.utterances && result.utterances.length > 0) {
+            finalContent = result.utterances
+              .map((u: any) => {
+                const cleanText = cleanTranscript(u.text); 
+                if (!cleanText || cleanText.length < 2) return null;
+
+                // Ustalamy nazwę
+                const label = u.speaker === 'A' ? 'ROZMÓWCA A' : (u.speaker === 'B' ? 'ROZMÓWCA B' : `ROZMÓWCA ${u.speaker}`);
+                
+                // ZAPISUJEMY DO MAPY: ID "A" -> "ROZMÓWCA A"
+                // Dzięki temu input na górze wyświetli "ROZMÓWCA A", a nie "C"
+                initialSpeakerMap[u.speaker] = label;
+
+                return `${label}:\n${cleanText}\n`;
+              })
+              .filter(Boolean)
+              .join('\n');
+          } else {
+            finalContent = cleanTranscript(result.text);
+          }
+
           const newItem: HistoryItem = { 
               id: uniqueId, 
               title: fileName, 
               date: new Date().toISOString(), 
-              content: result.text, 
-              utterances: result.utterances,
-              speakerNames: { "A": "Rozmówca A", "B": "Rozmówca B" } 
+              content: finalContent,
+              utterances: [], 
+              speakerNames: initialSpeakerMap // WAŻNE: Przekazujemy wypełnioną mapę
           };
           
           await dbSave(newItem);
@@ -537,7 +594,9 @@ const checkStatus = async (id: string, fileName: string) => {
           setSelectedItem(newItem);
           setIsProcessing(false);
           setStatus('');
-        } else if (result.status === 'error') { 
+        }
+
+        else if (result.status === 'error') { 
             clearInterval(interval); 
             setStatus('Błąd przetwarzania AI'); 
             setIsProcessing(false); 
@@ -640,47 +699,148 @@ const processFile = async (file: File) => {
     setIsEditingTitle(false);
   };
 
-  const handleSpeakerNameChange = async (speakerKey: string, newName: string) => {
+// Zastąp starą funkcję tą wersją:
+const handleSpeakerNameChange = async (idOrName: string, newName: string) => {
     if (!selectedItem) return;
-    const updatedItem = { ...selectedItem, speakerNames: { ...selectedItem.speakerNames, [speakerKey]: newName } };
-    await updateAndSave(updatedItem);
-  };
-
-  const handleAddSpeaker = (name: string) => {
-    if (!selectedItem) return;
-    const currentKeys = getAllSpeakers();
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let newKey = "";
-    for (let char of alphabet) { if (!currentKeys.includes(char)) { newKey = char; break; } }
-    if (!newKey) newKey = `S${currentKeys.length + 1}`;
-    handleSpeakerNameChange(newKey, name || newKey);
-    setIsAddSpeakerModalOpen(false);
-  };
-
-  const handleDeleteSpeakerClick = (speakerKey: string) => { setSpeakerToDelete(speakerKey); };
-
-  const executeMerge = async (source: string, target: string) => {
-    if (!selectedItem) return;
-    const newUtterances = selectedItem.utterances?.map(u => ({ ...u, speaker: u.speaker === source ? target : u.speaker })) || [];
-    const newNames = { ...selectedItem.speakerNames }; delete newNames[source]; 
-    const updatedItem = { ...selectedItem, speakerNames: newNames, utterances: newUtterances };
-    await updateAndSave(updatedItem);
-    setIsMergeModalOpen(false);
-  };
-
-  const insertSpeakerAtCursor = (speakerKey: string) => {
-    if (!textareaRef.current || !selectedItem) return;
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart; const end = textarea.selectionEnd;
-    const currentText = getDisplayText(selectedItem!);
-    const name = getSpeakerName(speakerKey) || speakerKey;
-    const insertText = `\n${name.toUpperCase()}:\n`;
-    const newText = currentText.substring(0, start) + insertText + currentText.substring(end);
     
-    const updatedItem = { ...selectedItem, content: newText, utterances: [] };
+    // 1. Ustal starą nazwę (czyli to, co TERAZ jest w tekście)
+    // Jeśli idOrName jest w bazie, weź nazwę z bazy. Jeśli nie, to idOrName JEST nazwą.
+    const currentDisplayName = getSpeakerName(idOrName);
+    
+    const finalNewName = newName.trim(); 
+    if (!finalNewName || currentDisplayName === finalNewName) return;
+
+    // 2. Aktualizujemy bazę (Mapę ID -> Nazwa)
+    const newSpeakerNames = { ...(selectedItem.speakerNames || {}) };
+    
+    // Jeśli zmieniamy kogoś, kto nie miał ID (był tylko w tekście), tworzymy mu nowe ID
+    // Jeśli miał ID, aktualizujemy wpis
+    const targetId = (selectedItem.speakerNames && selectedItem.speakerNames[idOrName]) ? idOrName : idOrName;
+    
+    // Ale uwaga: jeśli 'targetId' to była nazwa z tekstu, lepiej nadać jej stałe ID teraz
+    // Dla uproszczenia: używamy klucza, który przyszedł.
+    newSpeakerNames[targetId] = finalNewName;
+
+    // 3. Znajdź i Zamień w tekście
+    let newContent = getDisplayText(selectedItem);
+    const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // Szukamy starej nazwy z tolerancją na spacje przed dwukropkiem
+    const regex = new RegExp(`^${escapeRegExp(currentDisplayName)}\\s*:`, 'gm');
+    
+    // Podmieniamy na nową nazwę
+    newContent = newContent.replace(regex, `${finalNewName}:`);
+
+    // 4. Zapisz wszystko
+    const updatedItem = { 
+        ...selectedItem, 
+        speakerNames: newSpeakerNames,
+        content: newContent,
+        utterances: [] // Czyścimy metadane AI
+    };
+
+    await updateAndSave(updatedItem);
+  };
+// Zastąp starą funkcję tą wersją:
+const handleAddSpeaker = (name: string) => {
+    if (!selectedItem) return;
+    const finalName = name.trim().toUpperCase();
+    if (!finalName) return;
+
+    // Generujemy unikalne ID
+    const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
+    
+    // TYLKO dodajemy do mapy (bazy nazw)
+    const newSpeakerNames = {
+        ...(selectedItem.speakerNames || {}),
+        [newId]: finalName
+    };
+
+    // Zapisujemy tylko mapę nazw, NIE ZMIENIAMY TEKSTU (content)
+    const updatedItem = { 
+        ...selectedItem, 
+        speakerNames: newSpeakerNames 
+    };
+    
     updateAndSave(updatedItem);
+    setIsAddSpeakerModalOpen(false);
     
-    setTimeout(() => { textarea.focus(); textarea.setSelectionRange(start + insertText.length, start + insertText.length); }, 0);
+    // Usuwamy scrollowanie na dół, bo nic tam nie dopisujemy
+  };
+
+const handleDeleteSpeakerClick = async (speakerId: string) => {
+    if (!selectedItem) return;
+    
+    // 1. Ustal jaką nazwę usuwamy z tekstu (np. "MAREK")
+    const displayName = getSpeakerName(speakerId);
+    
+    if (!window.confirm(`Czy na pewno chcesz usunąć rozmówcę "${displayName}" z całego tekstu?`)) {
+        return;
+    }
+
+    // 2. Usuń ID z mapy (Słownika)
+    const newSpeakerNames = { ...(selectedItem.speakerNames || {}) };
+    delete newSpeakerNames[speakerId];
+
+    // 3. WYCZYŚĆ TEKST: Znajdź wszystkie "MAREK:" i usuń je
+    let newContent = getDisplayText(selectedItem);
+    const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // Regex szuka: Początek linii -> Nazwa -> Dowolne spacje -> Dwukropek -> Ewentualne spacje/entery po dwukropku
+    // Dzięki temu usunie "MAREK:" i nie zostawi dziur.
+    const regex = new RegExp(`^${escapeRegExp(displayName)}\\s*:\\s*`, 'gm');
+    
+    // Zamieniamy na pusty ciąg znaków (czyli usuwamy etykietę rozmówcy, tekst wypowiedzi zostaje)
+    newContent = newContent.replace(regex, '');
+
+    // 4. Zapisz
+    const updatedItem = { 
+        ...selectedItem, 
+        speakerNames: newSpeakerNames,
+        content: newContent,
+        utterances: [] 
+    };
+
+    await updateAndSave(updatedItem);
+  };
+
+const insertSpeakerAtCursor = async (speakerName: string) => {
+    if (!textareaRef.current || !selectedItem) return;
+
+    const textarea = textareaRef.current;
+    
+    // Zapamiętujemy pozycję scrolla i kursora PRZED zmianą
+    const scrollTop = textarea.scrollTop;
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
+
+    const currentText = getDisplayText(selectedItem);
+    const textToInsert = `\n\n${speakerName}:\n`;
+
+    // Wstawiamy tekst
+    const newContent = 
+      currentText.substring(0, selectionStart) + 
+      textToInsert + 
+      currentText.substring(selectionEnd);
+
+    // Aktualizujemy stan
+    const updatedItem = { ...selectedItem, content: newContent, utterances: [] };
+    await updateAndSave(updatedItem);
+
+    // PRZYWRACANIE STANU (Klucz do braku skakania)
+    // Robimy to w requestAnimationFrame, żeby zdążyć po renderze Reacta
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        
+        // Obliczamy gdzie ma być kursor (za wstawionym tekstem)
+        const newCursorPos = selectionStart + textToInsert.length;
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+        
+        // Przywracamy scroll, żeby ekran nie skoczył
+        textareaRef.current.scrollTop = scrollTop;
+      }
+    });
   };
 
   const executeDeleteFile = async () => {
@@ -786,7 +946,7 @@ const processFile = async (file: File) => {
             <div className="hero-container">
               <div className="hero-content">
                 <div className="hero-title">Lasto</div>
-                <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Pisz</span></div>
+                <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Twórz</span></div>
               </div>
               <div className="import-zone">
                 {/* TUTAJ WSTAWIAMY NOWY TYPEWRITER LOADER */}
@@ -830,20 +990,52 @@ const processFile = async (file: File) => {
                   </div>
                 )}
               </div>
-            <div className="speaker-list">
-              {getAllSpeakers().map((speakerKey) => {
-                const displayValue = selectedItem?.speakerNames?.[speakerKey] !== undefined ? selectedItem.speakerNames[speakerKey] : speakerKey;
-                return (
-                  <div key={speakerKey} className="speaker-badge">
-                    <button onMouseDown={(e) => { e.preventDefault(); insertSpeakerAtCursor(speakerKey); }} className="speaker-action-btn btn-insert" title="Wstaw do tekstu">+</button>
-                    <input className="speaker-input" value={displayValue} onChange={(e) => handleSpeakerNameChange(speakerKey, e.target.value)} placeholder="Nazwa..." />
-                    <button onClick={() => handleDeleteSpeakerClick(speakerKey)} className="speaker-action-btn btn-delete" title="Usuń rozmówcę"><CloseIcon /></button>
-                  </div>
-                );
-              })}
-             <button onClick={() => setIsAddSpeakerModalOpen(true)} className="btn-add-speaker mr-2">Nowy</button>
-             {getAllSpeakers().length > 1 && <button onClick={() => setIsMergeModalOpen(true)} className="btn-add-speaker" title="Scal rozmówców">Scal rozmówców</button>}
-            </div>
+
+<div className="speaker-list flex flex-wrap gap-2 mb-4">
+  {getAllSpeakers().map((speakerId) => {
+    // ID (np. "A") vs Nazwa (np. "MAREK")
+    const displayName = getSpeakerName(speakerId);
+    
+    return (
+      <div key={speakerId} className="speaker-badge flex items-center gap-1 bg-white/5 p-1 rounded-md border border-white/10">
+        
+   {/* DUŻY PLUS */}
+        <button 
+            // WAŻNE: onMouseDown zamiast onClick. 
+            // preventDefault() sprawia, że focus nie ucieka z pola tekstowego!
+            onMouseDown={(e) => { 
+                e.preventDefault(); 
+                insertSpeakerAtCursor(displayName); 
+            }}
+            className="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold text-xl shadow-md transition-all active:scale-95 cursor-pointer" 
+            title="Wstaw nazwę w miejscu kursora"
+        >
+          +
+        </button>
+        
+        {/* 2. ŚMIETNIK (Usuwanie) */}
+        <button 
+            onClick={() => handleDeleteSpeakerClick(speakerId)} 
+            className="flex items-center justify-center w-10 h-10 bg-white/5 hover:bg-red-500/20 text-white/40 hover:text-red-400 rounded transition-colors" 
+            title="Usuń rozmówcę z tekstu"
+        >
+            <TrashIcon /> 
+        </button>
+
+        {/* 3. INPUT (Nazwa) */}
+        <SpeakerRenameInput 
+            initialName={displayName}
+            onRename={(oldVal, newVal) => handleSpeakerNameChange(speakerId, newVal)}
+        />
+      </div>
+    );
+  })}
+  
+  <div className="flex items-center gap-2 ml-2">
+    <button onClick={() => setIsAddSpeakerModalOpen(true)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded text-sm font-medium transition-colors">Nowy</button>
+  </div>
+</div>
+
               <div className="relative flex-1 w-full min-h-0">
                 <textarea 
                     key={selectedItem.id} 
@@ -851,6 +1043,9 @@ const processFile = async (file: File) => {
                     className="w-full h-full p-8 bg-gray-100/40 dark:bg-gray-900/40 pb-24 dark:text-gray-200 rounded-2xl font-mono text-base md:text-sm leading-relaxed border-none focus:ring-0 resize-none outline-none"
                     value={getDisplayText(selectedItem)} 
                     onChange={(e) => handleTextChange(e.target.value)} 
+                    onSelect={handleCursorActivity}
+  onClick={handleCursorActivity}
+  onKeyUp={handleCursorActivity}
                     onBlur={handleTextBlur}
                     onContextMenu={handleContextMenu} 
                 />
@@ -865,11 +1060,114 @@ const processFile = async (file: File) => {
       <DeleteModal isOpen={!!speakerToDelete} onClose={() => setSpeakerToDelete(null)} onConfirm={confirmSpeakerDeletion} title={speakerToDelete ? getSpeakerName(speakerToDelete) || speakerToDelete : ""} isLoading={isProcessing} />
       <DeleteModal isOpen={isDeleteAllModalOpen} onClose={() => setIsDeleteAllModalOpen(false)} onConfirm={executeDeleteAll} title="WSZYSTKO" isLoading={isProcessing} />
       <InfoModal isOpen={infoModal.isOpen} title={infoModal.title} message={infoModal.message} onClose={() => setInfoModal({ ...infoModal, isOpen: false })} />
-      <MergeModal isOpen={isMergeModalOpen} onClose={() => setIsMergeModalOpen(false)} onConfirm={executeMerge} speakers={getAllSpeakers()} getSpeakerName={getSpeakerName} />
       <AddSpeakerModal isOpen={isAddSpeakerModalOpen} onClose={() => setIsAddSpeakerModalOpen(false)} onConfirm={handleAddSpeaker} />
-      {contextMenu && contextMenu.visible && (
-        <ContextMenu x={contextMenu.x} y={contextMenu.y} speakers={getAllSpeakers()} getSpeakerName={getSpeakerName} onInsert={(key) => insertSpeakerAtCursor(key)} onClose={() => setContextMenu(null)} onNewSpeaker={() => setIsAddSpeakerModalOpen(true)} onDragStart={startDrag} />
+    {contextMenu && contextMenu.visible && (
+        <ContextMenu 
+            x={contextMenu.x} 
+            y={contextMenu.y} 
+            speakers={getAllSpeakers()} 
+            getSpeakerName={getSpeakerName} // Przekazujemy funkcję tłumaczącą do wyświetlania w menu
+            
+            // POPRAWKA: Tłumaczymy ID na Nazwę ZANIM wstawimy do tekstu
+            onInsert={(speakerId) => insertSpeakerAtCursor(getSpeakerName(speakerId))} 
+            
+            onClose={() => setContextMenu(null)} 
+            onNewSpeaker={() => setIsAddSpeakerModalOpen(true)} 
+            onDragStart={startDrag} 
+        />
       )}
     </main>
   );
 }
+// --- NOWY KOMPONENT: Input, który nie traci focusu ---
+const SpeakerRenameInput = ({ 
+  initialName, 
+  onRename 
+}: { 
+  initialName: string, 
+  onRename: (oldName: string, newName: string) => void 
+}) => {
+  const [value, setValue] = useState(initialName);
+
+  useEffect(() => {
+    setValue(initialName);
+  }, [initialName]);
+
+  const handleBlur = () => {
+    if (value !== initialName) {
+      onRename(initialName, value);
+    }
+  };
+
+  // POPRAWKA TUTAJ: Dodano typ generyczny <HTMLInputElement>
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      // TypeScript teraz wie, że to input i ma metodę blur()
+      e.currentTarget.blur(); 
+    }
+  };
+
+  return (
+    <input 
+      className="speaker-input" 
+      value={value} 
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      placeholder="Nazwa..." 
+    />
+  );
+};
+
+// --- FUNKCJA CZYSZCZĄCA TEKST (IVR + Wtrącenia) ---
+const cleanTranscript = (text: string) => {
+  if (!text) return "";
+
+  let cleaned = text;
+
+  // 1. DUŻE KOMUNIKATY (np. IVR, Poczta głosowa)
+  const phrasesToRemove = [
+    /Twój rozmówca zawiesił połączenie.*?rozmowę\./gi,
+    /Prosimy poczekać\./gi,
+    /Twój rozmówca zawiesił połączenie\./gi,
+    /Wkrótce będziesz mógł kontynuować rozmowę\./gi,
+    /Please wait\. Your call will be continued in a moment\./gi,
+    /Please wait\./gi
+  ];
+
+  phrasesToRemove.forEach((regex) => {
+    cleaned = cleaned.replace(regex, "");
+  });
+
+  // 2. MAŁE WTRĄCENIA (Filler words)
+  // Tutaj dopisuj słowa, które chcesz wycinać (małymi literami)
+  const fillerWords = [
+    "aha",
+    "mhm",
+    "yhm",
+    "yyy",
+    "eee",
+    "umm"
+  ];
+
+  if (fillerWords.length > 0) {
+    // Magia Regexa:
+    // \b           -> Granica słowa (żeby nie uciąć "błaha" usuwając "aha")
+    // (...|...)    -> Lista słów
+    // [.,?!]?      -> Opcjonalny znak interpunkcyjny po słowie
+    // \s* -> Opcjonalne spacje po słowie
+    const fillerRegex = new RegExp(`\\b(${fillerWords.join('|')})[.,?!]?\\s*`, 'gi');
+    
+    cleaned = cleaned.replace(fillerRegex, "");
+  }
+
+  // 3. KOSMETYKA KOŃCOWA
+  // Usuwamy podwójne spacje i ewentualne podwójne przecinki, które mogły zostać
+  cleaned = cleaned
+    .replace(/\s+/g, " ")          // Podwójne spacje -> jedna
+    .replace(/\s+([.,?!])/g, "$1") // Spacja przed kropką -> brak spacji
+    .replace(/,\s*,/g, ",")        // Przecinek, spacja, przecinek -> jeden przecinek
+    .trim();
+
+  return cleaned;
+};
