@@ -5,73 +5,91 @@ import { Readable } from 'stream';
 
 export const runtime = 'nodejs';
 
-// UWAGA: Na Windows upewnij się, że 'yt-dlp' jest w PATH lub podaj pełną ścieżkę do pliku .exe
-// np. const YT_DLP_PATH = 'C:\\Tools\\yt-dlp.exe';
+// Na Renderze (Docker) yt-dlp jest w PATH. 
+// Na Windows lokalnie upewnij się, że masz yt-dlp.exe w folderze lub w PATH.
 const YT_DLP_PATH = 'yt-dlp'; 
+
+// Helper: Sprawdza czy jesteśmy w Dockerze i czy mamy podaną ścieżkę do Chrome
+const getBrowserPath = () => {
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        return process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    return null; // Lokalnie zwróci null, więc Puppeteer użyje swojej domyślnej wersji
+};
 
 export async function POST(req: Request) {
   let browser = null;
+  
   try {
     const { url } = await req.json();
     const apiKey = req.headers.get('x-api-key');
 
     if (!apiKey) return NextResponse.json({ error: 'Brak klucza API' }, { status: 401 });
 
-    console.log(`1. [Local-Power] Start dla: ${url}`);
+    console.log(`1. [Hybrid-Backend] Start dla: ${url}`);
     
-    // --- ŚCIEŻKA 1: YouTube (Używa systemowego yt-dlp) ---
+    // --- ŚCIEŻKA 1: YouTube (Używa systemowego yt-dlp - najstabilniejsze) ---
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
         return await handleYoutubeWithYtDlp(url, apiKey, YT_DLP_PATH);
     }
 
-    // --- ŚCIEŻKA 2: Reszta świata (Używa pełnego Puppeteera) ---
-    // To obsłuży Google Drive, TapeACall i każdą inną stronę
-    console.log("   Uruchamianie pełnej przeglądarki (Puppeteer)...");
+    // --- ŚCIEŻKA 2: Reszta świata (Puppeteer) ---
+    // Google Drive, TapeACall, inne strony
+    console.log("   Uruchamianie przeglądarki (Puppeteer)...");
     
- browser = await puppeteer.launch({
+    const launchOptions: any = {
         headless: true,
         args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
+            '--no-sandbox',               // WYMAGANE dla Dockera/Render
+            '--disable-setuid-sandbox',   // WYMAGANE dla Dockera
+            '--disable-dev-shm-usage',    // Zapobiega wywalaniu się pamięci w kontenerze
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
             '--single-process', 
             '--disable-gpu'
         ]
-    });
+    };
+
+    // Jeśli Dockerfile ustawił ścieżkę do Chrome, używamy jej
+    const sysChrome = getBrowserPath();
+    if (sysChrome) {
+        console.log(`   [Docker] Używam systemowego Chrome: ${sysChrome}`);
+        launchOptions.executablePath = sysChrome;
+    } else {
+        console.log("   [Local] Używam domyślnego Chrome z Puppeteer");
+    }
+
+    browser = await puppeteer.launch(launchOptions);
     
     const page = await browser.newPage();
-    // Udajemy zwykłego użytkownika
+    // Udajemy zwykłego użytkownika Windowsa (omija proste blokady botów)
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
     console.log("   Wchodzę na stronę...");
-    // Długi timeout dla ciężkich stron
+    // Dajemy mu chwilę (timeout 60s), bo Render czasem muli
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Wyciąganie linku bezpośredniego
+    // Skrypt wstrzykiwany w stronę, szuka linku audio
     const audioSrc = await page.evaluate(() => {
-        // Funkcja pomocnicza do bezpiecznego pobierania src
         const getSrc = (el: any) => el?.src || el?.href || null;
 
-        // 1. Szukamy w <audio source> (częste w Drive/TapeACall)
+        // 1. Tag <source>
         const audioSource = document.querySelector('audio source');
         if (audioSource) return (audioSource as HTMLSourceElement).src;
 
-        // 2. Szukamy w <audio>
+        // 2. Tag <audio>
         const audio = document.querySelector('audio');
         if (audio) return (audio as HTMLAudioElement).src;
         
-        // 3. Szukamy w <video> (czasem audio jest w playerze wideo)
+        // 3. Tag <video>
         const video = document.querySelector('video');
         if (video) return (video as HTMLVideoElement).src;
 
-        // 4. Szukamy przycisków pobierania (np. Google Drive "Download anyway")
+        // 4. Linki "Pobierz" (np. Google Drive export)
         const links = Array.from(document.querySelectorAll('a'));
         const directLink = links.find(a => {
             const href = (a as HTMLAnchorElement).href || '';
-            // Szukamy linków, które wyglądają na pliki lub akcje pobierania
             return (href.includes('export=download') || href.includes('.mp3') || href.includes('.m4a')) 
                 && !href.includes('google.com/url?');
         });
@@ -84,20 +102,19 @@ export async function POST(req: Request) {
     const pageTitle = await page.title();
 
     if (!audioSrc) {
-        throw new Error('Nie znaleziono pliku audio na stronie (Puppeteer nie widzi playera ani linku).');
+        throw new Error('Nie znaleziono pliku audio na stronie (Puppeteer).');
     }
 
-    console.log(`   ✅ Znaleziono link źródłowy: ${audioSrc.substring(0, 60)}...`);
+    console.log(`   ✅ Znaleziono link: ${audioSrc.substring(0, 50)}...`);
 
-    // Pobieramy ciasteczka z Puppeteera i przekazujemy do fetch
-    // To KLUCZOWE dla Google Drive, żeby autoryzacja przeszła
+    // Pobieramy ciasteczka, żeby autoryzacja Drive przeszła dalej
     const cookies = await page.cookies();
     const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
 
     await browser.close();
     browser = null;
 
-    console.log("   Pobieranie strumienia z ciasteczkami...");
+    console.log("   Pobieranie strumienia (Fetch)...");
     
     const audioRes = await fetch(audioSrc, {
         headers: { 
@@ -108,7 +125,6 @@ export async function POST(req: Request) {
 
     if (!audioRes.ok || !audioRes.body) throw new Error(`Serwer źródłowy odrzucił połączenie: ${audioRes.status}`);
 
-    // Przekazujemy strumień (body) bezpośrednio do AssemblyAI
     return await uploadStreamToAssembly(audioRes.body, pageTitle || 'Import WWW', apiKey);
 
   } catch (error: any) {
@@ -118,11 +134,11 @@ export async function POST(req: Request) {
   }
 }
 
-// --- HELPER: STRUMIENIOWY UPLOAD ---
+// --- HELPER: STRUMIENIOWY UPLOAD DO ASSEMBLY ---
 async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Readable | null, title: string, apiKey: string) {
     if (!stream) throw new Error("Brak strumienia danych.");
 
-    // Konwersja Web Stream na Node Stream (dla fetch w Node.js)
+    // Konwersja Web Stream -> Node Stream
     // @ts-ignore
     const nodeStream = stream.pipe ? stream : Readable.fromWeb(stream);
 
@@ -134,8 +150,8 @@ async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Reada
             'Authorization': apiKey,
             'Content-Type': 'application/octet-stream'
         },
-        body: nodeStream as any, // 'as any' naprawia błędy typów TS
-        // @ts-ignore - wymagane w Node.js
+        body: nodeStream as any, // 'as any' naprawia błąd typów przy buildzie
+        // @ts-ignore - wymagane dla Node.js
         duplex: 'half' 
     });
 
@@ -153,9 +169,9 @@ async function uploadStreamToAssembly(stream: ReadableStream<Uint8Array> | Reada
     });
 }
 
-// --- HELPER: YOUTUBE (Lokalny yt-dlp) ---
+// --- HELPER: YOUTUBE (yt-dlp binary) ---
 async function handleYoutubeWithYtDlp(url: string, apiKey: string, ytPath: string) {
-    console.log("   Uruchamianie lokalnego yt-dlp...");
+    console.log("   Uruchamianie yt-dlp...");
     
     // 1. Pobieranie tytułu
     let title = 'YouTube Video';
@@ -165,14 +181,20 @@ async function handleYoutubeWithYtDlp(url: string, apiKey: string, ytPath: strin
         await new Promise((resolve) => titleProcess.on('close', resolve));
     } catch(e) {}
 
-    // 2. Pobieranie audio na stdout (strumień)
+    // 2. Pobieranie strumienia audio
     const process = spawn(ytPath, [
-        '-f', 'bestaudio/best', // Najlepsze audio
+        '-f', 'bestaudio/best',
         '--no-playlist',
-        '-o', '-', // Wypisz na standardowe wyjście (pipe)
+        '-o', '-', // stdout
         url
     ]);
 
-    // Przekazujemy strumień z yt-dlp prosto do funkcji uploadu
+    // Logowanie błędów yt-dlp (pomocne na Renderze)
+    process.stderr.on('data', (data) => {
+        const msg = data.toString();
+        // Ignorujemy paski postępu, pokazujemy tylko błędy
+        if (msg.includes('ERROR') || msg.includes('WARNING')) console.log(`[yt-dlp] ${msg}`);
+    });
+
     return await uploadStreamToAssembly(process.stdout, title, apiKey);
 }
