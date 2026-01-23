@@ -13,7 +13,8 @@ export interface HistoryItem {
   title: string;
   date: string;
   content: string;
-  utterances?: Utterance[];
-  speakerNames?: SpeakerMap;
-  [key: string]: any;
+  utterances: any[];
+  speakerNames: Record<string, string>;
+  isProcessing?: boolean; 
+  assemblyId?: string;
 }

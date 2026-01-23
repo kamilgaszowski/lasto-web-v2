@@ -13,7 +13,7 @@ import {
   CloseIcon, 
   TrashIcon, 
   IconCopy,
-  // Nowe ikony (Upewnij się, że są w Icons.tsx lub są zdefiniowane tutaj)
+  LinkIcon,
   IconTextMode,
   IconSpeakerMode
 } from '../components/Icons';
@@ -40,7 +40,7 @@ const TypewriterLoader = ({ message }: { message: string }) => {
     }
     else if (text === message && !isDeleting.current) {
        isDeleting.current = true;
-       speed = 2000; // Dłuższa pauza na przeczytanie "Gotowe..."
+       speed = 2000; 
     }
     else if (text.length === 0 && isDeleting.current) {
        isDeleting.current = false;
@@ -91,8 +91,8 @@ export default function LastoWeb() {
   const [pantryId, setPantryId] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
+  const [importUrl, setImportUrl] = useState('');
   
-  // Tryb edytora: 'text' (zwykły) lub 'speaker' (dodawanie rozmówcy Enterem)
   const [editorMode, setEditorMode] = useState<'text' | 'speaker'>('text');
   
   // Refy
@@ -130,6 +130,133 @@ export default function LastoWeb() {
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; cursorIndex: number; selectedText: string | null } | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // --- FUNKCJA ODŚWIEŻAJĄCA Z BAZY (Musi być tutaj, na górze) ---
+  const refreshFromDb = async () => {
+    try {
+      const saved = await dbGetAll();
+      const sorted = saved.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setHistory(sorted);
+    } catch (e) {
+      console.error("Błąd odświeżania bazy:", e);
+    }
+  };
+
+  // --- CHECK STATUS (Musi być zdefiniowany przed użyciem w processUrl) ---
+// --- CHECK STATUS (Musi być zdefiniowany przed użyciem w processUrl) ---
+  const checkStatus = async (assemblyId: string, localDbId: string, rawFileName: string, currentApiKey: string) => {
+    
+    const fileName = rawFileName.replace(/[^\w\s\-\.ąćęłńóśźżĄĆĘŁŃÓŚŹŻ\(\)]/g, "").trim() || "Nagranie";
+    console.log(`[TŁO] Start pętli dla DB ID: ${localDbId}`);
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${assemblyId}`, { 
+            headers: { 'Authorization': currentApiKey } 
+        });
+        
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) clearInterval(interval);
+            return;
+        }
+
+        const result = await res.json();
+
+        // 1. SUKCES - MAMY TEKST!
+        if (result.status === 'completed') {
+          clearInterval(interval);
+          
+          // Formatowanie tekstu...
+          const initialSpeakerMap: Record<string, string> = {};
+          let finalContent = "";
+
+          if (result.utterances && result.utterances.length > 0) {
+            const uniqueSpeakersInOrder = Array.from(new Set(result.utterances.map((u: any) => u.speaker)));
+            const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            uniqueSpeakersInOrder.forEach((lbl: any, idx) => {
+                initialSpeakerMap[lbl] = `ROZMÓWCA ${alphabet[idx] || lbl}`;
+            });
+            finalContent = result.utterances
+              .map((u: any) => {
+                const clean = cleanTranscript(u.text);
+                return clean ? `${initialSpeakerMap[u.speaker]}:\n${clean}\n` : null;
+              })
+              .filter(Boolean).join('\n');
+          } else {
+            finalContent = cleanTranscript(result.text);
+          }
+
+          // TWORZYMY GOTOWY OBIEKT
+          const finalItem: HistoryItem = { 
+              id: localDbId, 
+              title: fileName, 
+              date: new Date().toISOString(), 
+              content: finalContent, 
+              utterances: [], 
+              speakerNames: initialSpeakerMap,
+              isProcessing: false 
+          };
+          
+          // 1. ZAPISUJEMY DO BAZY LOKALNEJ
+          await dbSave(finalItem);
+          
+          // 2. ODŚWIEŻAMY WIDOK
+          await refreshFromDb();
+          
+          // 3. --- NOWOŚĆ: WYMUSZAMY ZAPIS DO PANTRY ---
+          // Pobieramy najnowszą wersję z bazy i wysyłamy do chmury
+          const allItems = await dbGetAll();
+          // Sortujemy tak samo jak przy wyświetlaniu
+          const sorted = allItems.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          // Wywołujemy triggerAutoSave ręcznie, przekazując posortowaną listę
+          await triggerAutoSave(sorted);
+          
+          console.log("[TŁO] Zapisano do Pantry!");
+
+          // Jeśli użytkownik akurat ma to wybrane, odświeżamy też edytor
+          setSelectedItem(prev => prev?.id === localDbId ? finalItem : prev);
+          
+        } 
+        // 2. BŁĄD AI
+        else if (result.status === 'error') {
+            clearInterval(interval);
+            const errorItem = {
+                id: localDbId,
+                title: `${fileName} (Błąd AI)`,
+                date: new Date().toISOString(),
+                content: `Błąd transkrypcji: ${result.error}`,
+                utterances: [],
+                speakerNames: {},
+                isProcessing: false
+            };
+            await dbSave(errorItem);
+            await refreshFromDb();
+            // Też wysyłamy do chmury, żeby błąd się zapisał
+            const allItems = await dbGetAll();
+            await triggerAutoSave(allItems);
+        }
+
+      } catch (err) { 
+          console.error("Błąd w pętli sprawdzania:", err);
+      }
+    }, 5000); 
+  };
+
+// --- INIT ---
+  useEffect(() => {
+    setApiKey(localStorage.getItem('assemblyAIKey') || '');
+    const savedPantryId = localStorage.getItem('pantryId') || '';
+    setPantryId(savedPantryId);
+
+    // Ładujemy dane z bazy przy starcie
+    refreshFromDb();
+
+    if (savedPantryId) {
+        // Opcjonalnie: Załaduj z chmury, ale nie blokuj widoku lokalnego
+        loadFromCloud(true);
+    }
+  }, []);
 
   // --- KOMPRESJA LOKALNA ---
   const localCompressHistory = (historyData: HistoryItem[]) => {
@@ -192,23 +319,6 @@ export default function LastoWeb() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isProcessing, infoModal.isOpen, isDeleteModalOpen, isDeleteAllModalOpen, speakerToDelete, isSettingsOpen]);
-
-  // --- INIT ---
-  useEffect(() => {
-    setApiKey(localStorage.getItem('assemblyAIKey') || '');
-    const savedPantryId = localStorage.getItem('pantryId') || '';
-    setPantryId(savedPantryId);
-
-    const initData = async () => {
-        try {
-            const items = await dbGetAll();
-            const sorted = items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            setHistory(sorted);
-            if (savedPantryId) loadFromCloud(true);
-        } catch (e) { console.error("Błąd bazy danych:", e); }
-    };
-    initData();
-  }, []); 
 
   // --- POLLING ---
   useEffect(() => {
@@ -309,35 +419,6 @@ export default function LastoWeb() {
     }
   };
 
-  const saveToCloudImmediately = async (dataToSave: HistoryItem[]) => {
-    const cleanId = pantryId?.trim();
-    if (!cleanId) return;
-    try {
-        const compressed = localCompressHistory(dataToSave);
-        if (compressed.length === 0) {
-             await fetch('/api/pantry', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: cleanId, data: { history: [] } })
-            });
-        } else {
-            const CHUNK_SIZE = 50;
-            for (let i = 0; i < compressed.length; i += CHUNK_SIZE) {
-                await fetch('/api/pantry', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        id: cleanId,
-                        data: {
-                            [`chunk_${Math.floor(i/CHUNK_SIZE)}`]: compressed.slice(i, i + CHUNK_SIZE), 
-                            manifest: { totalChunks: Math.ceil(compressed.length/CHUNK_SIZE), timestamp: Date.now() } 
-                        }
-                    })
-                });
-            }
-        }
-    } catch (e) { console.error("Cloud upload failed", e); }
-  };
-
   const loadFromCloud = async (isSilent = false) => {
     if (isUserTypingRef.current) return;
     const cleanId = pantryId?.trim();
@@ -384,11 +465,22 @@ export default function LastoWeb() {
              const remoteHistory = localDecompressHistory(remoteCompressed);
              const sortedRemote = remoteHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-             const currentLocalItems = historyRef.current;
+             // UWAGA: Tu też używamy bazy jako źródła
+             const currentLocalItems = await dbGetAll();
+             const processingItems = currentLocalItems.filter(item => item.isProcessing);
+            
              for (const item of currentLocalItems) { await dbDelete(item); }
+             for (const item of processingItems) { await dbSave(item); }
              for (const item of sortedRemote) { await dbSave(item); }
 
-             setHistory(sortedRemote);
+             for (const item of sortedRemote) { 
+    // Jeśli ID z chmury koliduje z procesującym się plikiem, to ignorujemy chmurę na rzecz lokalnego procesu
+    if (!processingItems.find(p => p.id === item.id)) {
+        await dbSave(item); 
+    }
+}
+
+             await refreshFromDb();
 
              if (selectedItemRef.current) {
                  const exists = sortedRemote.find(i => i.id === selectedItemRef.current?.id);
@@ -413,9 +505,10 @@ export default function LastoWeb() {
 
   // --- ACTIONS: ZAPIS TEKSTU ---
   const performSaveText = (itemId: string, textToSave: string) => {
-      setHistory(currentHistory => {
+      // Pobieramy aktualny stan z bazy, żeby nie nadpisać czegoś starego
+      dbGetAll().then(currentHistory => {
           const itemIndex = currentHistory.findIndex(i => i.id === itemId);
-          if (itemIndex === -1) return currentHistory;
+          if (itemIndex === -1) return;
 
           const existingItem = currentHistory[itemIndex];
           const finalItemToSave = { 
@@ -425,19 +518,16 @@ export default function LastoWeb() {
               date: new Date().toISOString()
           };
 
-          const newHistory = [...currentHistory];
-          newHistory[itemIndex] = finalItemToSave;
-          const sortedHistory = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-          triggerAutoSave(sortedHistory);
-          dbSave(finalItemToSave);
+          dbSave(finalItemToSave).then(() => {
+              refreshFromDb(); // Odświeżamy widok po zapisie
+              triggerAutoSave(); // Wyślij do chmury (opcjonalnie całą listę)
+          });
 
           if (selectedItemRef.current?.id === itemId) {
               setSelectedItem(finalItemToSave);
           }
           
           isUserTypingRef.current = false;
-          return sortedHistory;
       });
   };
 
@@ -451,8 +541,7 @@ export default function LastoWeb() {
     if (!selectedItem) return;
     
     isUserTypingRef.current = true;
-    const editingId = selectedItem.id;
-
+    
     const updatedItem = { 
         ...selectedItem, 
         content: newText, 
@@ -460,15 +549,14 @@ export default function LastoWeb() {
         date: new Date().toISOString() 
     };
 
-    setSelectedItem(updatedItem);
-    setHistory(prev => prev.map(item => item.id === editingId ? updatedItem : item));
-    await dbSave(updatedItem);
-
+    // Aktualizujemy tylko lokalny stan edytora dla płynności
+    setSelectedItem(updatedItem); 
+    
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     setCloudStatus('saving');
 
     saveTimeoutRef.current = setTimeout(() => {
-        performSaveText(editingId, newText);
+        performSaveText(selectedItem.id, newText);
     }, 2000); 
   };
 
@@ -479,211 +567,52 @@ export default function LastoWeb() {
       }
   };
 
-  // --- "MAGICZNY ENTER" DLA TRYBU ROZMÓWCY ---
-  const handleEditorKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Jeśli nie tryb 'speaker' albo nie Enter -> zwykłe działanie
-    if (editorMode !== 'speaker' || e.key !== 'Enter') {
-        if (editorMode === 'speaker' && e.key === 'Escape') setEditorMode('text');
-        return;
-    }
-
-    e.preventDefault(); 
-
-    const textarea = e.currentTarget;
-    const cursor = textarea.selectionStart;
-    const text = textarea.value;
-
-    const lastNewLine = text.lastIndexOf('\n', cursor - 1);
-    const startOfLine = lastNewLine === -1 ? 0 : lastNewLine + 1;
-    
-    // Nazwa wpisana przez usera w tej linii
-    const rawName = text.substring(startOfLine, cursor).trim();
-
-    if (!rawName) {
-        setEditorMode('text');
-        return;
-    }
-
-    // Unikalność (dodawanie _1)
-    let finalName = rawName.toUpperCase();
-    const existingSpeakers = getAllSpeakers().map(id => getSpeakerName(id).toUpperCase());
-    
-    let counter = 1;
-    const baseName = finalName;
-    while (existingSpeakers.includes(finalName)) {
-        finalName = `${baseName}_${counter}`;
-        counter++;
-    }
-
-    if (selectedItem) {
-        const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
-        const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [newId]: finalName };
-
-        const textBeforeLine = text.substring(0, startOfLine);
-        const textAfterCursor = text.substring(cursor);
-        
-        const prefix = startOfLine === 0 ? "" : "\n\n";
-        const formattedBlock = `${prefix}${finalName}:\n`;
-
-        const newContent = textBeforeLine + formattedBlock + textAfterCursor;
-
-        const updatedItem = { 
-            ...selectedItem, 
-            speakerNames: newSpeakerNames,
-            content: newContent 
-        };
-        
-        await updateAndSave(updatedItem);
-        
-        const newCursorPos = startOfLine + formattedBlock.length;
-        
-        requestAnimationFrame(() => {
-            if (textareaRef.current) {
-                textareaRef.current.value = newContent; 
-                textareaRef.current.focus();
-                textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-            }
-        });
-    }
-
-    setEditorMode('text');
-  };
-
-  // --- KEYS MANAGEMENT ---
-  const exportKeys = () => {
-    const keys = { assemblyAIKey: apiKey, pantryId: pantryId };
-    const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = `lasto_keys_backup.json`;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importKeys = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const imported = JSON.parse(e.target?.result as string);
-        if (imported.assemblyAIKey || imported.pantryId) {
-          if (imported.assemblyAIKey) { setApiKey(imported.assemblyAIKey); localStorage.setItem('assemblyAIKey', imported.assemblyAIKey); }
-          if (imported.pantryId) { setPantryId(imported.pantryId); localStorage.setItem('pantryId', imported.pantryId); setTimeout(() => loadFromCloud(false), 500); }
-          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane.' });
-        } else { throw new Error("Brak kluczy"); }
-      } catch (err) { setInfoModal({ isOpen: true, title: 'Błąd', message: 'Zły format pliku.' }); }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
-  };
-
-  // --- ASSEMBLY AI & PROCESSING ---
-  const checkStatus = async (id: string, fileName: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { 
-            headers: { 'Authorization': apiKey } 
-        });
-        
-        if (!res.ok) {
-            if (res.status === 401) {
-                clearInterval(interval);
-                setStatus('Błąd klucza API');
-                setIsProcessing(false);
-            }
-            return;
-        }
-
-        const result = await res.json();
-
-        if (result.status === 'completed') {
-          clearInterval(interval);
-          setStatus('Gotowe...');
-          
-          const uniqueId = `${id}-${Date.now()}`;
-          const initialSpeakerMap: Record<string, string> = {};
-          
-          let finalContent = "";
-
-          if (result.utterances && result.utterances.length > 0) {
-            // KOLEJNOŚĆ A, B, C...
-            const uniqueSpeakersInOrder = Array.from(new Set(result.utterances.map((u: any) => u.speaker)));
-            const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-            uniqueSpeakersInOrder.forEach((originalLabel: any, index) => {
-                const letter = alphabet[index] || originalLabel; 
-                initialSpeakerMap[originalLabel] = `ROZMÓWCA ${letter}`;
-            });
-
-            finalContent = result.utterances
-              .map((u: any) => {
-                const cleanText = cleanTranscript(u.text); 
-                if (!cleanText || cleanText.length < 2) return null;
-                const label = initialSpeakerMap[u.speaker];
-                return `${label}:\n${cleanText}\n`;
-              })
-              .filter(Boolean).join('\n');
-          } else {
-            finalContent = cleanTranscript(result.text);
-          }
-
-          const newItem: HistoryItem = { 
-              id: uniqueId, title: fileName, date: new Date().toISOString(), 
-              content: finalContent, utterances: [], speakerNames: initialSpeakerMap 
-          };
-          
-          await dbSave(newItem);
-          
-          setTimeout(() => {
-              setHistory(prev => {
-                 const exists = prev.some(item => item.id === uniqueId || item.id.startsWith(id));
-                 if (exists) return prev; 
-                 const updated = [newItem, ...prev];
-                 saveToCloudImmediately(updated);
-                 return updated;
-              });
-              setSelectedItem(newItem);
-              
-              setIsProcessing(false);
-              setStatus('');
-          }, 1500);
-        }
-
-        else if (result.status === 'error') { 
-            clearInterval(interval); 
-            setStatus('Błąd przetwarzania AI'); 
-            setIsProcessing(false); 
-        } else {
-            setStatus('Przetwarzanie');
-        }
-      } catch (err) { 
-          console.warn("Błąd podczas sprawdzania statusu", err);
-      }
-    }, 3000);
-  };
-
-  const processFile = async (file: File) => {
+  // --- PROCESS FILE / URL ---
+ 
+const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
-    setStatus('Wysyłanie'); 
-    
+    setStatus('Wysyłanie pliku...');
+
+    // 1. WPIS TYMCZASOWY OD RAZU
+    const tempId = `file-pending-${Date.now()}`;
+    const tempItem: HistoryItem = {
+        id: tempId,
+        title: `${file.name} (Przetwarzanie...)`,
+        date: new Date().toISOString(),
+        content: "Trwa transkrypcja w tle...",
+        utterances: [],
+        speakerNames: {},
+        isProcessing: true 
+    };
+
+    await dbSave(tempItem);
+    await refreshFromDb(); 
+
     try {
-      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { 
-          method: 'POST', 
-          headers: { 'Authorization': apiKey }, 
-          body: file 
+      // 2. UPLOAD PLIKU (BEZ FormData!)
+      // AssemblyAI wymaga surowego pliku w body
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: { 
+            'Authorization': apiKey,
+            'Content-Type': 'application/octet-stream' // Kluczowa zmiana
+        },
+        body: file // Wysyłamy plik bezpośrednio, nie przez FormData
       });
-      
-      if (!uploadRes.ok) throw new Error("Błąd wysyłania");
+
+      if (!uploadRes.ok) {
+          const err = await uploadRes.json();
+          throw new Error(err.error || "Błąd uploadu do AssemblyAI");
+      }
       
       const { upload_url } = await uploadRes.json();
-      
-      setStatus('Przetwarzanie');
-      
+
+      setStatus('Zlecanie transkrypcji...');
+
+      // 3. Start transkrypcji
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST', 
+        method: 'POST',
         headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             audio_url: upload_url, 
@@ -691,15 +620,120 @@ export default function LastoWeb() {
             speaker_labels: true 
         })
       });
-      
-      if (!transcriptRes.ok) throw new Error("Błąd startu transkrypcji");
 
+      if (!transcriptRes.ok) throw new Error("Błąd startu transkrypcji");
       const { id } = await transcriptRes.json();
-      checkStatus(id, file.name);
+
+      // --- ZAPISUJEMY ID ASSEMBLY DO BAZY (DLA WZNAWIANIA) ---
+      const processingItem = { ...tempItem, assemblyId: id };
+      await dbSave(processingItem);
+
+      setIsProcessing(false); 
+      setStatus('');
+
+      // Przekazujemy pałeczkę
+      checkStatus(id, tempId, file.name, apiKey);
+
+    } catch (e: any) {
+      console.error(e);
+      const errorItem = { ...tempItem, title: "BŁĄD PLIKU", content: e.message, isProcessing: false };
+      await dbSave(errorItem);
+      await refreshFromDb();
+
+      setStatus(`Błąd: ${e.message}`);
+      setTimeout(() => {
+          setIsProcessing(false);
+          setStatus('');
+      }, 3000);
+    }
+  };
+ 
+
+const processUrl = async () => {
+    if (!apiKey || !importUrl.trim()) return;
+    
+    const urlToProcess = importUrl.trim();
+    setImportUrl(''); 
+    setIsProcessing(true);
+    setStatus('Inicjowanie...');
+
+    const tempId = `pending-${Date.now()}`;
+    // Tworzymy obiekt - na razie bez assemblyId
+    const tempItem: HistoryItem = {
+        id: tempId,
+        title: "Pobieranie...",
+        date: new Date().toISOString(),
+        content: "Oczekiwanie na pobranie pliku i transkrypcję...",
+        utterances: [],
+        speakerNames: {},
+        isProcessing: true 
+    };
+
+    await dbSave(tempItem);
+    await refreshFromDb(); 
+
+    try {
+      let finalAudioUrl = urlToProcess;
+      let videoTitle = 'Import z linku';
+      const isYoutube = urlToProcess.includes('youtube.com') || urlToProcess.includes('youtu.be');
+
+      if (isYoutube) {
+        setStatus('Pobieranie audio...');
+        tempItem.title = "Pobieranie z YouTube...";
+        await dbSave(tempItem);
+        refreshFromDb();
+
+        const ytRes = await fetch('/api/get-youtube-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+            body: JSON.stringify({ url: urlToProcess })
+        });
+
+        if (!ytRes.ok) throw new Error("Błąd pobierania (YouTube/WWW)");
+        
+        const ytData = await ytRes.json();
+        finalAudioUrl = ytData.uploadUrl; 
+        videoTitle = ytData.title || 'Import z YouTube';
+        
+        tempItem.title = `${videoTitle} (Przetwarzanie...)`;
+        await dbSave(tempItem);
+        refreshFromDb();
+      }
+
+      setStatus('Wysyłanie do AI...');
+
+      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST', 
+        headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            audio_url: finalAudioUrl, 
+            language_code: 'pl', 
+            speaker_labels: true 
+        })
+      });
       
-    } catch (e) { 
-        setStatus('Błąd połączenia'); 
-        setTimeout(() => setIsProcessing(false), 3000); 
+      if (!transcriptRes.ok) throw new Error("Błąd AssemblyAI");
+      const { id } = await transcriptRes.json(); // To jest AssemblyID
+
+      // --- KLUCZOWA ZMIANA: ZAPISUJEMY ASSEMBLY ID DO BAZY ---
+      // Dzięki temu po odświeżeniu wiemy co sprawdzać
+      const processingItem = { ...tempItem, assemblyId: id };
+      await dbSave(processingItem);
+      
+      setIsProcessing(false); 
+      setStatus('');
+
+      checkStatus(id, tempId, videoTitle, apiKey);
+      
+    } catch (e: any) { 
+        console.error(e);
+        const errorItem = { ...tempItem, title: "BŁĄD IMPORTU", content: e.message, isProcessing: false };
+        await dbSave(errorItem);
+        await refreshFromDb();
+        
+        setIsProcessing(false);
+        setStatus(`Błąd: ${e.message}`); 
+        setTimeout(() => setStatus(''), 4000);
     }
   };
 
@@ -729,14 +763,10 @@ export default function LastoWeb() {
   // --- ACTIONS (Other) ---
   const updateAndSave = async (updatedItem: HistoryItem) => {
       const itemWithNewDate = { ...updatedItem, date: new Date().toISOString() };
-      setHistory(prev => {
-          const newHistory = prev.map(item => item.id === itemWithNewDate.id ? itemWithNewDate : item);
-          const sorted = newHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          triggerAutoSave(sorted); 
-          return sorted;
-      });
-      setSelectedItem(itemWithNewDate);
       await dbSave(itemWithNewDate);
+      await refreshFromDb(); // Odśwież widok z bazy
+      setSelectedItem(itemWithNewDate);
+      triggerAutoSave(); 
   };
 
   const saveNewTitle = async () => {
@@ -747,28 +777,87 @@ export default function LastoWeb() {
     setIsEditingTitle(false);
   };
 
-  // --- SPEAKER MANAGEMENT (RENAME, MERGE, DELETE) ---
+  // --- EDITOR KEYDOWN ---
+  const handleEditorKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (editorMode !== 'speaker' || e.key !== 'Enter') {
+        if (editorMode === 'speaker' && e.key === 'Escape') setEditorMode('text');
+        return;
+    }
+
+    e.preventDefault(); 
+
+    const textarea = e.currentTarget;
+    const cursor = textarea.selectionStart;
+    const text = textarea.value;
+
+    const lastNewLine = text.lastIndexOf('\n', cursor - 1);
+    const startOfLine = lastNewLine === -1 ? 0 : lastNewLine + 1;
+    const rawName = text.substring(startOfLine, cursor).trim();
+
+    if (!rawName) {
+        setEditorMode('text');
+        return;
+    }
+
+    let finalName = rawName.toUpperCase();
+    const existingSpeakers = getAllSpeakers().map(id => getSpeakerName(id).toUpperCase());
+    
+    let counter = 1;
+    const baseName = finalName;
+    while (existingSpeakers.includes(finalName)) {
+        finalName = `${baseName}_${counter}`;
+        counter++;
+    }
+
+    if (selectedItem) {
+        const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
+        const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [newId]: finalName };
+
+        const textBeforeLine = text.substring(0, startOfLine);
+        const textAfterCursor = text.substring(cursor);
+        const prefix = startOfLine === 0 ? "" : "\n\n";
+        const formattedBlock = `${prefix}${finalName}:\n`;
+        const newContent = textBeforeLine + formattedBlock + textAfterCursor;
+
+        const updatedItem = { 
+            ...selectedItem, 
+            speakerNames: newSpeakerNames,
+            content: newContent 
+        };
+        
+        await updateAndSave(updatedItem);
+        
+        const newCursorPos = startOfLine + formattedBlock.length;
+        
+        requestAnimationFrame(() => {
+            if (textareaRef.current) {
+                textareaRef.current.value = newContent; 
+                textareaRef.current.focus();
+                textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+            }
+        });
+    }
+
+    setEditorMode('text');
+  };
+
+  // --- SPEAKER MANAGEMENT ---
   const handleSpeakerNameChange = async (speakerId: string, newName: string) => {
     if (!selectedItem) return;
-    
     const currentDisplayName = getSpeakerName(speakerId);
     let finalNewName = newName.trim(); 
-    
     if (!finalNewName || currentDisplayName === finalNewName) return;
 
-    // --- AUTOMATYCZNE ROZWIĄZYWANIE KONFLIKTÓW (SUFFIX _1) ---
     const otherSpeakersNames = getAllSpeakers()
         .filter(id => id !== speakerId)
         .map(id => getSpeakerName(id).toUpperCase());
 
     let counter = 1;
     const baseName = finalNewName;
-
     while (otherSpeakersNames.includes(finalNewName.toUpperCase())) {
         finalNewName = `${baseName}_${counter}`;
         counter++;
     }
-
     await executeRename(speakerId, finalNewName);
   };
 
@@ -796,18 +885,11 @@ const handleAddSpeaker = (name: string) => {
     const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
     const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [newId]: finalName };
 
-    // 1. Pobieramy tekst
     const currentText = getDisplayText(selectedItem);
-    
-    // 2. Używamy ZAPAMIĘTANEJ pozycji kursora (zamiast dopisywać na koniec)
-    // Jeśli kursor nie był ustawiony, wstawiamy na koniec (fallback)
     const cursorPosition = lastCursorPos.current !== null ? lastCursorPos.current : currentText.length;
-
-    // 3. Formatowanie (jeśli jesteśmy na początku pliku, nie dodajemy enterów przed)
     const prefix = cursorPosition === 0 ? "" : "\n\n";
     const textToInsert = `${prefix}${finalName}:\n`;
 
-    // 4. Sklejamy tekst: [Początek] + [Nowy Rozmówca] + [Reszta]
     const newContent = 
         currentText.substring(0, cursorPosition) + 
         textToInsert + 
@@ -822,34 +904,25 @@ const handleAddSpeaker = (name: string) => {
     updateAndSave(updatedItem);
     setIsAddSpeakerModalOpen(false);
 
-    // 5. Ustawiamy kursor i scrollujemy do miejsca edycji
     const newCursorPos = cursorPosition + textToInsert.length;
-    
     setTimeout(() => {
         if (textareaRef.current) {
             textareaRef.current.focus();
             textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-            // Opcjonalnie: blur i focus, aby upewnić się, że scroll podąży za kursorem
             textareaRef.current.blur();
             textareaRef.current.focus();
         }
     }, 100);
   };
 
-  const handleDeleteSpeakerClick = (speakerId: string) => {
-    setSpeakerToDelete(speakerId); 
-  };
+  const handleDeleteSpeakerClick = (speakerId: string) => { setSpeakerToDelete(speakerId); };
 
   const confirmSpeakerDeletion = async () => {
     if (!selectedItem || !speakerToDelete) return;
-    
     const displayName = getSpeakerName(speakerToDelete);
-    
-    // 1. Usuń z mapy
     const newSpeakerNames = { ...(selectedItem.speakerNames || {}) };
     delete newSpeakerNames[speakerToDelete];
 
-    // 2. Usuń z tekstu
     let newContent = getDisplayText(selectedItem);
     const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`^${escapeRegExp(displayName)}\\s*:\\s*`, 'gm');
@@ -863,12 +936,8 @@ const handleAddSpeaker = (name: string) => {
 
   const insertSpeakerAtCursor = async (speakerName: string) => {
     if (!textareaRef.current || !selectedItem) return;
-
     const textarea = textareaRef.current;
-    const cursorPosition = (document.activeElement === textarea) 
-      ? textarea.selectionStart 
-      : lastCursorPos.current;
-
+    const cursorPosition = (document.activeElement === textarea) ? textarea.selectionStart : lastCursorPos.current;
     const scrollTop = textarea.scrollTop;
     const currentText = getDisplayText(selectedItem);
     const textToInsert = `\n\n${speakerName}:\n`;
@@ -898,9 +967,8 @@ const handleAddSpeaker = (name: string) => {
     setIsProcessing(true);
     try {
         await dbDelete(itemToDelete);
-        const updatedHistory = history.filter(item => item.id !== itemToDelete.id);
-        setHistory(updatedHistory);
-        await triggerAutoSave(updatedHistory); 
+        await refreshFromDb(); // Odśwież z bazy zamiast filtrować history
+        triggerAutoSave(); 
 
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
         setIsDeleteModalOpen(false); 
@@ -912,12 +980,12 @@ const handleAddSpeaker = (name: string) => {
   const executeDeleteAll = async () => {
     setIsProcessing(true);
     try {
-        setHistory([]);
-        setSelectedItem(null);
-        await triggerAutoSave([]); 
-        
         const allItems = await dbGetAll();
         for (const item of allItems) await dbDelete(item);
+        
+        await refreshFromDb(); // Baza pusta -> stan pusty
+        setSelectedItem(null);
+        await triggerAutoSave([]); 
 
         setIsDeleteAllModalOpen(false);
         setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wyczyszczono wszystko.' });
@@ -929,8 +997,6 @@ const handleAddSpeaker = (name: string) => {
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation(); 
     const textarea = e.target as HTMLTextAreaElement;
-    
-    // Pobierz zaznaczony tekst
     const selection = window.getSelection()?.toString().trim();
 
     setContextMenu({ 
@@ -953,6 +1019,35 @@ const handleAddSpeaker = (name: string) => {
       setContextMenu(prev => prev ? { ...prev, x: dragData.initialX + dx, y: dragData.initialY + dy } : null);
   };
   const stopDrag = () => { dragRef.current = null; window.removeEventListener('mousemove', handleDragMove); window.removeEventListener('mouseup', stopDrag); };
+
+  const exportKeys = () => {
+    const keys = { assemblyAIKey: apiKey, pantryId: pantryId };
+    const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `lasto_keys_backup.json`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importKeys = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        if (imported.assemblyAIKey || imported.pantryId) {
+          if (imported.assemblyAIKey) { setApiKey(imported.assemblyAIKey); localStorage.setItem('assemblyAIKey', imported.assemblyAIKey); }
+          if (imported.pantryId) { setPantryId(imported.pantryId); localStorage.setItem('pantryId', imported.pantryId); setTimeout(() => loadFromCloud(false), 500); }
+          setInfoModal({ isOpen: true, title: 'Sukces', message: 'Klucze zaimportowane.' });
+        } else { throw new Error("Brak kluczy"); }
+      } catch (err) { setInfoModal({ isOpen: true, title: 'Błąd', message: 'Zły format pliku.' }); }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
 
   // --- RENDER ---
   return (
@@ -1001,6 +1096,7 @@ const handleAddSpeaker = (name: string) => {
                 <div className="hero-title">Lasto</div>
                 <div className="hero-subtitle"><span>Słuchaj</span> <span className="rune-divider">ᛟ</span> <span>Nagraj</span> <span className="rune-divider">ᛟ</span> <span>Twórz</span></div>
               </div>
+
               <div className="import-zone">
                 {isProcessing && status ? (
                   <div className="flex flex-col items-center justify-center space-y-2 py-2 animate-in fade-in zoom-in duration-2000">
@@ -1009,16 +1105,46 @@ const handleAddSpeaker = (name: string) => {
               ) : !apiKey ? (
                   <button onClick={() => { setSettingsStartTab('guide'); setIsSettingsOpen(true); }} className="btn-primary">Dodaj pierwsze nagranie</button>
                 ) : (
-                  <>
-                    <div className="flex flex-col items-center gap-4">
-                      <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import ${isDragging ? 'import-dragging' : ''}`}>
-                        {isDragging ? 'Upuść tutaj!' : 'Dodaj plik audio'}
-                        <input type="file"  className="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.aif,.mov,.mp4,.m4v,.wmv,.avi,.webm" onChange={handleFileInput}  />
-                      </label>
+                  <div className="flex flex-col items-center gap-6 w-full max-w-md mx-auto">
+                    
+                    <label onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop} className={`btn-import w-full ${isDragging ? 'import-dragging' : ''}`}>
+                      {isDragging ? 'Upuść tutaj!' : 'Wybierz plik audio'}
+                      <input type="file"  className="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.aif,.mov,.mp4,.m4v,.wmv,.avi,.webm" onChange={handleFileInput}  />
+                    </label>
+
+                    <div className="flex items-center gap-3 w-full opacity-30">
+                        <div className="h-px bg-white flex-1"></div>
+                        <span className="text-xs uppercase tracking-widest font-light">LUB Z LINKU</span>
+                        <div className="h-px bg-white flex-1"></div>
                     </div>
-                  </>
+
+                    <div className="flex w-full gap-2">
+                        <div className="relative flex-1">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                <LinkIcon />
+                            </div>
+                            <input 
+                                type="text" 
+                                value={importUrl}
+                                onChange={(e) => setImportUrl(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && processUrl()}
+                                placeholder="YouTube, MP3 URL..."
+                                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 focus:border-white/30 focus:bg-white/10 transition-all outline-none"
+                            />
+                        </div>
+                        <button 
+                            onClick={processUrl}
+                            disabled={!importUrl}
+                            className="px-6 py-2 bg-white text-black font-bold rounded-xl text-sm hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                            Wczytaj
+                        </button>
+                    </div>
+
+                  </div>
                 )}
               </div>
+
             </div>
           ) : (
             <div className="editor-container">
@@ -1047,7 +1173,6 @@ const handleAddSpeaker = (name: string) => {
                 const displayName = getSpeakerName(speakerId);
                 return (
                 <div key={speakerId} className="speaker-badge flex items-center gap-1 bg-white/5 p-1 rounded-md border border-white/10">
-                    {/* PLUS */}
                     <button 
                         onMouseDown={(e) => { e.preventDefault(); insertSpeakerAtCursor(displayName); }}
                         className="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold text-xl shadow-md transition-all active:scale-95 cursor-pointer" 
@@ -1056,7 +1181,6 @@ const handleAddSpeaker = (name: string) => {
                     +
                     </button>
                     
-                    {/* KOSZ */}
                     <button 
                         onClick={() => handleDeleteSpeakerClick(speakerId)} 
                         className="flex items-center justify-center w-10 h-10 bg-white/5 hover:bg-red-500/20 text-white/40 hover:text-red-400 rounded transition-colors" 
@@ -1065,7 +1189,6 @@ const handleAddSpeaker = (name: string) => {
                         <TrashIcon /> 
                     </button>
 
-                    {/* INPUT */}
                     <SpeakerRenameInput 
                         initialName={displayName}
                         onRename={(oldVal, newVal) => handleSpeakerNameChange(speakerId, newVal)}
@@ -1073,11 +1196,8 @@ const handleAddSpeaker = (name: string) => {
                 </div>
                 );
             })}
-            
-     
             </div>
 
-              {/* PASEK NARZĘDZI (TRYBY) */}
               <div className="flex items-center gap-1 mb-2 px-1">
                 <button 
                     onClick={() => setEditorMode('text')}
@@ -1093,7 +1213,6 @@ const handleAddSpeaker = (name: string) => {
                 <button 
                     onClick={() => {
                         setEditorMode('speaker');
-                        
                     }}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg text-sm font-medium transition-all ${
                         editorMode === 'speaker' 
@@ -1116,12 +1235,9 @@ const handleAddSpeaker = (name: string) => {
                <textarea 
     key={selectedItem.id} 
     ref={textareaRef} 
-    // ZMIANA TUTAJ: className z logiką tła bez bordera
     className={`w-full h-full p-8 pb-24 rounded-b-2xl rounded-tr-2xl font-mono text-base md:text-sm leading-relaxed border-2 focus:ring-0 resize-none outline-none transition-all duration-300
         ${editorMode === 'speaker' 
-            // TRYB ROZMÓWCY: Brak ramki, tło lekko zabarwione (indygo/niebieskie)
             ? 'border-transparent bg-gray-100/10 dark:bg-white-500/35' 
-            // TRYB ZWYKŁY: Przezroczysta ramka, szare tło
             : 'border-transparent bg-gray-100/40 dark:bg-gray-900/40'
         }`}
     value={getDisplayText(selectedItem)} 
@@ -1148,7 +1264,6 @@ const handleAddSpeaker = (name: string) => {
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} apiKey={apiKey} setApiKey={setApiKey} pantryId={pantryId} setPantryId={setPantryId} exportKeys={exportKeys} importKeys={importKeys} initialTab={settingsStartTab} />   
       <DeleteModal isOpen={isDeleteModalOpen} onClose={() => setIsDeleteModalOpen(false)} onConfirm={executeDeleteFile} title={itemToDelete?.title} isLoading={isProcessing} />
       
-      {/* MODAL USUWANIA ROZMÓWCY */}
       <DeleteModal 
           isOpen={!!speakerToDelete} 
           onClose={() => setSpeakerToDelete(null)} 
@@ -1163,7 +1278,6 @@ const handleAddSpeaker = (name: string) => {
       <InfoModal isOpen={infoModal.isOpen} title={infoModal.title} message={infoModal.message} onClose={() => setInfoModal({ ...infoModal, isOpen: false })} />
       <AddSpeakerModal isOpen={isAddSpeakerModalOpen} onClose={() => setIsAddSpeakerModalOpen(false)} onConfirm={handleAddSpeaker} />
     
-    {/* CONTEXT MENU */}
     {contextMenu && contextMenu.visible && (
         <ContextMenu 
             x={contextMenu.x} 
