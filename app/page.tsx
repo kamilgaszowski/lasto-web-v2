@@ -169,7 +169,7 @@ export default function LastoWeb() {
   const checkStatus = async (assemblyId: string, localDbId: string, rawFileName: string, currentApiKey: string) => {
     
     let fileName = removeExtension(rawFileName);
-    fileName = fileName.replace(' (Przetwarzanie...)', '').trim();
+    fileName = fileName.replace(' (Przetwarzanie)', '').trim();
 
     console.log(`[TŁO] Start pętli dla zadania: ${localDbId}`);
 
@@ -558,7 +558,7 @@ export default function LastoWeb() {
   const processFile = async (file: File) => {
     if (!apiKey) return;
     setIsProcessing(true);
-    setStatus('Wysyłanie pliku...');
+    setStatus('Wysyłanie');
 
     const cleanTitle = removeExtension(file.name); 
     const tempId = `file-${Date.now()}`;
@@ -585,7 +585,7 @@ export default function LastoWeb() {
       if (!transcriptRes.ok) throw new Error("Błąd startu");
       const { id } = await transcriptRes.json();
 
-      setStatus('Przetwarzanie (może to potrwać)...'); 
+      setStatus('Przetwarzanie'); 
       
       checkStatus(id, tempId, cleanTitle, apiKey);
 
@@ -629,7 +629,7 @@ export default function LastoWeb() {
         videoTitle = removeExtension(rawTitle);
       }
 
-      setStatus('Wysyłanie do AI...');
+      setStatus('Wysyłanie');
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ audio_url: finalAudioUrl, language_code: 'pl', speaker_labels: true })
@@ -638,7 +638,7 @@ export default function LastoWeb() {
       if (!transcriptRes.ok) throw new Error("Błąd AssemblyAI");
       const { id } = await transcriptRes.json();
       
-      setStatus('Przetwarzanie (może to potrwać)...'); 
+      setStatus('Przetwarzanie'); 
 
       checkStatus(id, tempId, videoTitle, apiKey);
       
