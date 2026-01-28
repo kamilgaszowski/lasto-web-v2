@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, ChangeEvent } from 'react';
 import './lasto.css';
 
 // Importy Komponentów
@@ -26,6 +26,7 @@ import { ContextMenu } from '../components/ContextMenu';
 import { HistoryItem } from '../types';
 import { dbSave, dbGetAll, dbDelete } from '../lib/storage';
 
+// --- ZMODYFIKOWANY LOADER ---
 const TypewriterLoader = ({ message }: { message: string }) => {
   const [text, setText] = useState('');
   const [showCursor, setShowCursor] = useState(true);
@@ -34,13 +35,35 @@ const TypewriterLoader = ({ message }: { message: string }) => {
   useEffect(() => {
     let speed = 50; 
     
-    if (!message.startsWith(text) && text.length > 0) {
-       isDeleting.current = true;
-       speed = 30; 
+    // Jeśli wiadomość się zmieniła na nową, resetujemy stan, żeby zaczął pisać od nowa
+    if (!message.startsWith(text) && !isDeleting.current && text !== '') {
+        // Jeśli tekst jest inny niż message, musimy go skasować lub podmienić
+        // W uproszczeniu: jeśli message się zmienił drastycznie, czyścimy
+        if (!message.includes(text)) {
+            setText('');
+            isDeleting.current = false;
+        }
     }
-    else if (text === message && !isDeleting.current) {
-       isDeleting.current = true;
-       speed = 2000; 
+
+    if (!message.startsWith(text) && text.length > 0) {
+       // Jeśli message jest krótszy niż to co mamy (np zmiana statusu), kasujemy
+       if (!message.includes(text)) {
+         isDeleting.current = true;
+         speed = 30; 
+       }
+    }
+    
+    // Logika pisania
+    if (text === message) {
+       // ZMIANA: Jeśli to "Gotowe!", ZATRZYMUJEMY SIĘ i nie kasujemy
+       if (message === 'Gotowe!') {
+           return; 
+       }
+       
+       if (!isDeleting.current) {
+         isDeleting.current = true;
+         speed = 2000; // Czekaj 2s zanim zaczniesz kasować (dla innych komunikatów)
+       }
     }
     else if (text.length === 0 && isDeleting.current) {
        isDeleting.current = false;
@@ -131,7 +154,7 @@ export default function LastoWeb() {
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // --- FUNKCJA ODŚWIEŻAJĄCA Z BAZY (Musi być tutaj, na górze) ---
+  // --- FUNKCJA ODŚWIEŻAJĄCA Z BAZY ---
   const refreshFromDb = async () => {
     try {
       const saved = await dbGetAll();
@@ -145,12 +168,10 @@ export default function LastoWeb() {
   // --- CHECK STATUS ---
   const checkStatus = async (assemblyId: string, localDbId: string, rawFileName: string, currentApiKey: string) => {
     
-    // UŻYWAMY FUNKCJI USUWAJĄCEJ TYLKO ROZSZERZENIA
     let fileName = removeExtension(rawFileName);
-    // Usuwamy "Przetwarzanie..." z nazwy, jeśli tam jest (dla wznawianych zadań)
     fileName = fileName.replace(' (Przetwarzanie...)', '').trim();
 
-    console.log(`[TŁO] Start pętli dla DB ID: ${localDbId}`);
+    console.log(`[TŁO] Start pętli dla zadania: ${localDbId}`);
 
     const interval = setInterval(async () => {
       try {
@@ -159,7 +180,11 @@ export default function LastoWeb() {
         });
         
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) clearInterval(interval);
+            if (res.status === 401 || res.status === 403) {
+                clearInterval(interval);
+                setIsProcessing(false);
+                setInfoModal({ isOpen: true, title: 'Błąd API', message: 'Klucz API jest nieprawidłowy.' });
+            }
             return;
         }
 
@@ -168,7 +193,8 @@ export default function LastoWeb() {
         // 1. SUKCES
         if (result.status === 'completed') {
           clearInterval(interval);
-          
+          setStatus('Finalizowanie...');
+
           const initialSpeakerMap: Record<string, string> = {};
           let finalContent = "";
 
@@ -188,7 +214,6 @@ export default function LastoWeb() {
             finalContent = cleanTranscript(result.text);
           }
 
-          // TWORZYMY GOTOWY OBIEKT
           const finalItem: HistoryItem = { 
               id: localDbId, 
               title: fileName, 
@@ -197,37 +222,60 @@ export default function LastoWeb() {
               utterances: [], 
               speakerNames: initialSpeakerMap,
               isProcessing: false,
-              assemblyId: assemblyId // Zachowujemy ID
+              assemblyId: assemblyId 
           };
           
+          // Zapisujemy do bazy
           await dbSave(finalItem);
-          await refreshFromDb();
+
+          // 1. Ustawiamy status "Gotowe!" - Loader to wyświetli i się zatrzyma (bo zablokowaliśmy kasowanie)
+          setStatus('Gotowe!');
           
-          // WYMUSZAMY ZAPIS DO PANTRY
+          // UWAGA: Nie ustawiamy jeszcze setSelectedItem! Dzięki temu widok wciąż jest na Loaderze.
+
+          // Odświeżamy tło
+          await refreshFromDb();
           const allItems = await dbGetAll();
           const sorted = allItems.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          await triggerAutoSave(sorted);
-          
-          console.log("[TŁO] Zakończono i wysłano do Pantry!");
-          setSelectedItem(prev => prev?.id === localDbId ? finalItem : prev);
+          triggerAutoSave(sorted);
+
+          console.log("[TŁO] Zakończono sukcesem!");
+
+          // 2. Czekamy 2 sekundy, żeby user nacieszył się napisem "Gotowe!"
+          setTimeout(() => {
+            requestAnimationFrame(() => {
+               // 3. Dopiero teraz przełączamy widok
+               setSelectedItem(finalItem); 
+               
+               // I zdejmujemy loader
+               setIsProcessing(false); 
+               setStatus('');
+            });
+          }, 2000);
           
         } 
         // 2. BŁĄD AI
         else if (result.status === 'error') {
             clearInterval(interval);
+            setStatus(`Błąd AI: ${result.error}`);
+            
             const errorItem = {
                 id: localDbId,
-                title: `${fileName} (Błąd AI)`,
+                title: `${fileName} (Błąd)`,
                 date: new Date().toISOString(),
-                content: `Błąd transkrypcji: ${result.error}`,
+                content: `Wystąpił błąd transkrypcji: ${result.error}`,
                 utterances: [],
                 speakerNames: {},
                 isProcessing: false
             };
             await dbSave(errorItem);
             await refreshFromDb();
-            const allItems = await dbGetAll();
-            await triggerAutoSave(allItems);
+            
+            setTimeout(() => {
+                setIsProcessing(false);
+                setStatus('');
+                setInfoModal({ isOpen: true, title: 'Niepowodzenie', message: `AssemblyAI zwróciło błąd: ${result.error}` });
+            }, 3000);
         }
 
       } catch (err) { 
@@ -245,30 +293,6 @@ export default function LastoWeb() {
       setPantryId(savedPantryId);
 
       await refreshFromDb();
-
-      // WZNAWIANIE PRZERWANYCH ZADAŃ
-      const allItems = await dbGetAll();
-      const stuckItems = allItems.filter((i: any) => i.isProcessing);
-
-      if (stuckItems.length > 0 && savedKey) {
-          console.log(`[INIT] Znaleziono ${stuckItems.length} przerwanych zadań. Wznawiam...`);
-          
-          stuckItems.forEach((item: any) => {
-              if (item.assemblyId) {
-                  // Usuwamy "(Przetwarzanie...)" tylko do logiki wznawiania
-                  const rawTitle = item.title.replace(' (Przetwarzanie...)', '');
-                  checkStatus(item.assemblyId, item.id, rawTitle, savedKey);
-              } else {
-                  const fixedItem = { 
-                      ...item, 
-                      isProcessing: false, 
-                      title: item.title.replace(' (Przetwarzanie...)', ' (Błąd)'),
-                      content: "Proces przerwany (brak ID transkrypcji po odświeżeniu)." 
-                  };
-                  dbSave(fixedItem).then(refreshFromDb);
-              }
-          });
-      }
 
       if (savedPantryId) {
           loadFromCloud(true);
@@ -340,17 +364,6 @@ export default function LastoWeb() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isProcessing, infoModal.isOpen, isDeleteModalOpen, isDeleteAllModalOpen, speakerToDelete, isSettingsOpen]);
 
-  // --- POLLING ---
-  useEffect(() => {
-    if (!pantryId) return;
-    const interval = setInterval(() => {
-        if (!isEditingTitle && !isUserTypingRef.current && cloudStatus !== 'saving') {
-            loadFromCloud(true);
-        }
-    }, 60000); 
-    return () => clearInterval(interval);
-  }, [pantryId, isEditingTitle, cloudStatus]);
-
   useEffect(() => {
     const handleClickOutside = () => { if (contextMenu) setContextMenu(null); };
     window.addEventListener('click', handleClickOutside);
@@ -360,10 +373,8 @@ export default function LastoWeb() {
   // --- HELPERS ---
   const getAllSpeakers = () => {
     if (!selectedItem) return [];
-
     const knownIds = Object.keys(selectedItem.speakerNames || {});
     const knownNames = Object.values(selectedItem.speakerNames || {});
-
     const text = getDisplayText(selectedItem);
     const regex = /^([^\n:]+):/gm;
     const foundNamesInText = new Set<string>();
@@ -401,10 +412,8 @@ export default function LastoWeb() {
   const triggerAutoSave = async (overrideHistory?: HistoryItem[]) => {
     const cleanId = pantryId?.trim();
     if (!cleanId) return;
-
     setCloudStatus('saving'); 
     const dataToSave = overrideHistory || history;
-
     try {
         const compressed = localCompressHistory(dataToSave);
         if (compressed.length === 0) {
@@ -447,32 +456,28 @@ export default function LastoWeb() {
         return;
     }
     
-    if (!isSilent) setIsProcessing(true);
-    
+    if (!isSilent) {
+        setIsProcessing(true);
+        setStatus("Pobieranie z chmury...");
+    }
+
     try {
         const res = await fetch(`/api/pantry?id=${cleanId}&t=${Date.now()}`, { 
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            cache: 'no-store'
+            method: 'GET', headers: { 'Content-Type': 'application/json' }, cache: 'no-store'
         });
         
         if (res.status === 429) {
             if (!isSilent) setInfoModal({ isOpen: true, title: 'Zwolnij', message: 'Za dużo zapytań. Odczekaj chwilę.' });
-            setIsProcessing(false);
             return; 
         }
-
         if (res.status === 404) {
              if (!isSilent) setInfoModal({ isOpen: true, title: 'Info', message: 'Chmura jest pusta.' });
-             setIsProcessing(false);
              return;
         }
-
         if (!res.ok) throw new Error(`Błąd: ${res.status}`);
         
         const data = await res.json();
         let remoteCompressed: any[] = [];
-
         if (data.manifest && data.manifest.totalChunks) {
             for (let i = 0; i < data.manifest.totalChunks; i++) {
                 if (data[`chunk_${i}`]) remoteCompressed = [...remoteCompressed, ...data[`chunk_${i}`]];
@@ -484,36 +489,19 @@ export default function LastoWeb() {
         if (remoteCompressed.length >= 0) {
              const remoteHistory = localDecompressHistory(remoteCompressed);
              const sortedRemote = remoteHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
+             
              const currentLocalItems = await dbGetAll();
-             
-             // ZABEZPIECZENIE: Nie nadpisujemy zadań, które są w toku
-             const processingItems = currentLocalItems.filter(item => item.isProcessing);
-
              for (const item of currentLocalItems) { await dbDelete(item); }
+             for (const item of sortedRemote) { await dbSave(item); }
              
-             // Przywracamy te, co się mieliły
-             for (const item of processingItems) { await dbSave(item); }
-
-             // Zapisujemy resztę z chmury
-             for (const item of sortedRemote) { 
-                 if (!processingItems.find(p => p.id === item.id)) {
-                     await dbSave(item); 
-                 }
-             }
-
              await refreshFromDb();
-
+             
              if (selectedItemRef.current) {
                  const exists = sortedRemote.find(i => i.id === selectedItemRef.current?.id);
-                 if (!exists) setSelectedItem(null);
-                 else setSelectedItem(exists);
-             }
-
-             if (!isSilent) {
-                 setInfoModal({ isOpen: true, title: 'Zaktualizowano', message: 'Lista jest zgodna z chmurą.' });
+                 if (!exists) setSelectedItem(null); else setSelectedItem(exists);
              }
              
+             if (!isSilent) setInfoModal({ isOpen: true, title: 'Zaktualizowano', message: 'Lista jest zgodna z chmurą.' });
              setPobierzState(true);
              setTimeout(() => setPobierzState(false), 2000);
              setIsSettingsOpen(false);
@@ -522,7 +510,12 @@ export default function LastoWeb() {
         console.error(e);
         if (!isSilent) setInfoModal({ isOpen: true, title: 'Błąd', message: e.message }); 
     }
-    finally { setIsProcessing(false); }
+    finally { 
+        if (!isSilent) {
+            setIsProcessing(false);
+            setStatus('');
+        }
+    }
   };
 
   // --- ACTIONS: ZAPIS TEKSTU ---
@@ -530,24 +523,12 @@ export default function LastoWeb() {
       dbGetAll().then(currentHistory => {
           const itemIndex = currentHistory.findIndex(i => i.id === itemId);
           if (itemIndex === -1) return;
-
           const existingItem = currentHistory[itemIndex];
           const finalItemToSave = { 
-              ...existingItem, 
-              content: textToSave, 
-              utterances: undefined as any,
-              date: new Date().toISOString()
+              ...existingItem, content: textToSave, utterances: undefined as any, date: new Date().toISOString()
           };
-
-          dbSave(finalItemToSave).then(() => {
-              refreshFromDb(); 
-              triggerAutoSave(); 
-          });
-
-          if (selectedItemRef.current?.id === itemId) {
-              setSelectedItem(finalItemToSave);
-          }
-          
+          dbSave(finalItemToSave).then(() => { refreshFromDb(); triggerAutoSave(); });
+          if (selectedItemRef.current?.id === itemId) setSelectedItem(finalItemToSave);
           isUserTypingRef.current = false;
       });
   };
@@ -560,31 +541,17 @@ export default function LastoWeb() {
 
   const handleTextChange = async (newText: string) => {
     if (!selectedItem) return;
-    
     isUserTypingRef.current = true;
-    
-    const updatedItem = { 
-        ...selectedItem, 
-        content: newText, 
-        utterances: [], 
-        date: new Date().toISOString() 
-    };
-
+    const updatedItem = { ...selectedItem, content: newText, utterances: [], date: new Date().toISOString() };
     setSelectedItem(updatedItem); 
-    
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     setCloudStatus('saving');
-
-    saveTimeoutRef.current = setTimeout(() => {
-        performSaveText(selectedItem.id, newText);
-    }, 2000); 
+    saveTimeoutRef.current = setTimeout(() => { performSaveText(selectedItem.id, newText); }, 2000); 
   };
 
   const handleTextBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      if (selectedItem) {
-          performSaveText(selectedItem.id, e.target.value);
-      }
+      if (selectedItem) performSaveText(selectedItem.id, e.target.value);
   };
 
   // --- PROCESS FILE ---
@@ -593,99 +560,52 @@ export default function LastoWeb() {
     setIsProcessing(true);
     setStatus('Wysyłanie pliku...');
 
-    // UŻYCIE FUNKCJI POMOCNICZEJ
     const cleanTitle = removeExtension(file.name); 
-
-    const tempId = `file-pending-${Date.now()}`;
-    const tempItem: HistoryItem = {
-        id: tempId,
-        title: `${cleanTitle} (Przetwarzanie...)`,
-        date: new Date().toISOString(),
-        content: "Trwa transkrypcja w tle...",
-        utterances: [],
-        speakerNames: {},
-        isProcessing: true 
-    };
-
-    await dbSave(tempItem);
-    await refreshFromDb(); 
-
+    const tempId = `file-${Date.now()}`;
+    
     try {
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
-        headers: { 
-            'Authorization': apiKey,
-            'Content-Type': 'application/octet-stream'
-        },
+        headers: { 'Authorization': apiKey, 'Content-Type': 'application/octet-stream' },
         body: file
       });
-
       if (!uploadRes.ok) {
           const err = await uploadRes.json();
           throw new Error(err.error || "Błąd uploadu do AssemblyAI");
       }
-      
       const { upload_url } = await uploadRes.json();
-
+      
       setStatus('Zlecanie transkrypcji...');
-
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
         headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            audio_url: upload_url, 
-            language_code: 'pl', 
-            speaker_labels: true 
-        })
+        body: JSON.stringify({ audio_url: upload_url, language_code: 'pl', speaker_labels: true })
       });
 
       if (!transcriptRes.ok) throw new Error("Błąd startu");
       const { id } = await transcriptRes.json();
 
-      const processingItem = { ...tempItem, assemblyId: id };
-      await dbSave(processingItem);
-
-      setIsProcessing(false); 
-      setStatus('');
-
+      setStatus('Przetwarzanie (może to potrwać)...'); 
+      
       checkStatus(id, tempId, cleanTitle, apiKey);
 
     } catch (e: any) {
       console.error(e);
-      const errorItem = { ...tempItem, title: "BŁĄD PLIKU", content: e.message, isProcessing: false };
-      await dbSave(errorItem);
-      await refreshFromDb();
-
-      setStatus(`Błąd: ${e.message}`);
-      setTimeout(() => {
-          setIsProcessing(false);
-          setStatus('');
-      }, 3000);
+      setIsProcessing(false);
+      setStatus('');
+      setInfoModal({ isOpen: true, title: "Błąd", message: e.message });
     }
   };
  
   // --- PROCESS URL ---
   const processUrl = async () => {
     if (!apiKey || !importUrl.trim()) return;
-    
     const urlToProcess = importUrl.trim();
     setImportUrl(''); 
     setIsProcessing(true);
     setStatus('Inicjowanie...');
 
-    const tempId = `pending-${Date.now()}`;
-    const tempItem: HistoryItem = {
-        id: tempId,
-        title: "Pobieranie...",
-        date: new Date().toISOString(),
-        content: "Oczekiwanie na pobranie pliku i transkrypcję...",
-        utterances: [],
-        speakerNames: {},
-        isProcessing: true 
-    };
-
-    await dbSave(tempItem);
-    await refreshFromDb(); 
+    const tempId = `url-${Date.now()}`;
 
     try {
       let finalAudioUrl = urlToProcess;
@@ -694,10 +614,7 @@ export default function LastoWeb() {
 
       if (isYoutube || urlToProcess.includes('drive.google.com')) {
         setStatus('Pobieranie audio...');
-        tempItem.title = "Pobieranie danych...";
-        await dbSave(tempItem);
-        refreshFromDb();
-
+        
         const ytRes = await fetch('/api/get-youtube-stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
@@ -708,48 +625,28 @@ export default function LastoWeb() {
         
         const ytData = await ytRes.json();
         finalAudioUrl = ytData.uploadUrl; 
-        
-        // UŻYCIE FUNKCJI POMOCNICZEJ
         let rawTitle = ytData.title || 'Import z Internetu';
         videoTitle = removeExtension(rawTitle);
-        
-        tempItem.title = `${videoTitle} (Przetwarzanie...)`;
-        await dbSave(tempItem);
-        refreshFromDb();
       }
 
       setStatus('Wysyłanie do AI...');
-
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST', 
-        headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            audio_url: finalAudioUrl, 
-            language_code: 'pl', 
-            speaker_labels: true 
-        })
+        method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_url: finalAudioUrl, language_code: 'pl', speaker_labels: true })
       });
       
       if (!transcriptRes.ok) throw new Error("Błąd AssemblyAI");
       const { id } = await transcriptRes.json();
-
-      const processingItem = { ...tempItem, assemblyId: id };
-      await dbSave(processingItem);
       
-      setIsProcessing(false); 
-      setStatus('');
+      setStatus('Przetwarzanie (może to potrwać)...'); 
 
       checkStatus(id, tempId, videoTitle, apiKey);
       
     } catch (e: any) { 
         console.error(e);
-        const errorItem = { ...tempItem, title: "BŁĄD IMPORTU", content: e.message, isProcessing: false };
-        await dbSave(errorItem);
-        await refreshFromDb();
-        
         setIsProcessing(false);
-        setStatus(`Błąd: ${e.message}`); 
-        setTimeout(() => setStatus(''), 4000);
+        setStatus('');
+        setInfoModal({ isOpen: true, title: "Błąd Importu", message: e.message });
     }
   };
 
@@ -799,61 +696,38 @@ export default function LastoWeb() {
         if (editorMode === 'speaker' && e.key === 'Escape') setEditorMode('text');
         return;
     }
-
     e.preventDefault(); 
-
     const textarea = e.currentTarget;
     const cursor = textarea.selectionStart;
     const text = textarea.value;
-
     const lastNewLine = text.lastIndexOf('\n', cursor - 1);
     const startOfLine = lastNewLine === -1 ? 0 : lastNewLine + 1;
     const rawName = text.substring(startOfLine, cursor).trim();
-
-    if (!rawName) {
-        setEditorMode('text');
-        return;
-    }
+    if (!rawName) { setEditorMode('text'); return; }
 
     let finalName = rawName.toUpperCase();
     const existingSpeakers = getAllSpeakers().map(id => getSpeakerName(id).toUpperCase());
-    
-    let counter = 1;
-    const baseName = finalName;
-    while (existingSpeakers.includes(finalName)) {
-        finalName = `${baseName}_${counter}`;
-        counter++;
-    }
+    let counter = 1; const baseName = finalName;
+    while (existingSpeakers.includes(finalName)) { finalName = `${baseName}_${counter}`; counter++; }
 
     if (selectedItem) {
         const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
         const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [newId]: finalName };
-
         const textBeforeLine = text.substring(0, startOfLine);
         const textAfterCursor = text.substring(cursor);
         const prefix = startOfLine === 0 ? "" : "\n\n";
         const formattedBlock = `${prefix}${finalName}:\n`;
         const newContent = textBeforeLine + formattedBlock + textAfterCursor;
-
-        const updatedItem = { 
-            ...selectedItem, 
-            speakerNames: newSpeakerNames,
-            content: newContent 
-        };
-        
+        const updatedItem = { ...selectedItem, speakerNames: newSpeakerNames, content: newContent };
         await updateAndSave(updatedItem);
-        
         const newCursorPos = startOfLine + formattedBlock.length;
-        
         requestAnimationFrame(() => {
             if (textareaRef.current) {
                 textareaRef.current.value = newContent; 
-                textareaRef.current.focus();
-                textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+                textareaRef.current.focus(); textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
             }
         });
     }
-
     setEditorMode('text');
   };
 
@@ -863,70 +737,41 @@ export default function LastoWeb() {
     const currentDisplayName = getSpeakerName(speakerId);
     let finalNewName = newName.trim(); 
     if (!finalNewName || currentDisplayName === finalNewName) return;
-
-    const otherSpeakersNames = getAllSpeakers()
-        .filter(id => id !== speakerId)
-        .map(id => getSpeakerName(id).toUpperCase());
-
-    let counter = 1;
-    const baseName = finalNewName;
-    while (otherSpeakersNames.includes(finalNewName.toUpperCase())) {
-        finalNewName = `${baseName}_${counter}`;
-        counter++;
-    }
+    const otherSpeakersNames = getAllSpeakers().filter(id => id !== speakerId).map(id => getSpeakerName(id).toUpperCase());
+    let counter = 1; const baseName = finalNewName;
+    while (otherSpeakersNames.includes(finalNewName.toUpperCase())) { finalNewName = `${baseName}_${counter}`; counter++; }
     await executeRename(speakerId, finalNewName);
   };
 
   const executeRename = async (id: string, name: string) => {
       if (!selectedItem) return;
       const currentDisplayName = getSpeakerName(id);
-      
       const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [id]: name };
-      
       let newContent = getDisplayText(selectedItem);
       const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`^${escapeRegExp(currentDisplayName)}\\s*:`, 'gm');
       newContent = newContent.replace(regex, `${name}:`);
-
-      await updateAndSave({ 
-          ...selectedItem, speakerNames: newSpeakerNames, content: newContent, utterances: [] 
-      });
+      await updateAndSave({ ...selectedItem, speakerNames: newSpeakerNames, content: newContent, utterances: [] });
   };
 
 const handleAddSpeaker = (name: string) => {
     if (!selectedItem) return;
-    const finalName = name.trim().toUpperCase();
-    if (!finalName) return;
-
+    const finalName = name.trim().toUpperCase(); if (!finalName) return;
     const newId = `SPK_${Math.floor(Math.random() * 10000)}`;
     const newSpeakerNames = { ...(selectedItem.speakerNames || {}), [newId]: finalName };
-
     const currentText = getDisplayText(selectedItem);
     const cursorPosition = lastCursorPos.current !== null ? lastCursorPos.current : currentText.length;
     const prefix = cursorPosition === 0 ? "" : "\n\n";
     const textToInsert = `${prefix}${finalName}:\n`;
-
-    const newContent = 
-        currentText.substring(0, cursorPosition) + 
-        textToInsert + 
-        currentText.substring(cursorPosition);
-
-    const updatedItem = { 
-        ...selectedItem, 
-        speakerNames: newSpeakerNames,
-        content: newContent 
-    };
-    
+    const newContent = currentText.substring(0, cursorPosition) + textToInsert + currentText.substring(cursorPosition);
+    const updatedItem = { ...selectedItem, speakerNames: newSpeakerNames, content: newContent };
     updateAndSave(updatedItem);
     setIsAddSpeakerModalOpen(false);
-
     const newCursorPos = cursorPosition + textToInsert.length;
     setTimeout(() => {
         if (textareaRef.current) {
-            textareaRef.current.focus();
-            textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-            textareaRef.current.blur();
-            textareaRef.current.focus();
+            textareaRef.current.focus(); textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+            textareaRef.current.blur(); textareaRef.current.focus();
         }
     }, 100);
   };
@@ -938,15 +783,11 @@ const handleAddSpeaker = (name: string) => {
     const displayName = getSpeakerName(speakerToDelete);
     const newSpeakerNames = { ...(selectedItem.speakerNames || {}) };
     delete newSpeakerNames[speakerToDelete];
-
     let newContent = getDisplayText(selectedItem);
     const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`^${escapeRegExp(displayName)}\\s*:\\s*`, 'gm');
     newContent = newContent.replace(regex, '');
-
-    await updateAndSave({ 
-        ...selectedItem, speakerNames: newSpeakerNames, content: newContent, utterances: [] 
-    });
+    await updateAndSave({ ...selectedItem, speakerNames: newSpeakerNames, content: newContent, utterances: [] });
     setSpeakerToDelete(null);
   };
 
@@ -957,22 +798,14 @@ const handleAddSpeaker = (name: string) => {
     const scrollTop = textarea.scrollTop;
     const currentText = getDisplayText(selectedItem);
     const textToInsert = `\n\n${speakerName}:\n`;
-
-    const newContent = 
-      currentText.substring(0, cursorPosition) + 
-      textToInsert + 
-      currentText.substring(cursorPosition);
-
+    const newContent = currentText.substring(0, cursorPosition) + textToInsert + currentText.substring(cursorPosition);
     const updatedItem = { ...selectedItem, content: newContent, utterances: [] };
     await updateAndSave(updatedItem);
-
     const newCursorPos = cursorPosition + textToInsert.length;
     lastCursorPos.current = newCursorPos;
-
     requestAnimationFrame(() => {
       if (textareaRef.current) {
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+        textareaRef.current.focus(); textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
         textareaRef.current.scrollTop = scrollTop;
       }
     });
@@ -982,13 +815,9 @@ const handleAddSpeaker = (name: string) => {
     if (!itemToDelete) return; 
     setIsProcessing(true);
     try {
-        await dbDelete(itemToDelete);
-        await refreshFromDb(); 
-        triggerAutoSave(); 
-
+        await dbDelete(itemToDelete); await refreshFromDb(); triggerAutoSave(); 
         if (selectedItem?.id === itemToDelete.id) setSelectedItem(null);
-        setIsDeleteModalOpen(false); 
-        setItemToDelete(null);
+        setIsDeleteModalOpen(false); setItemToDelete(null);
     } catch (e) { console.error(e); } 
     finally { setIsProcessing(false); }
   };
@@ -998,11 +827,7 @@ const handleAddSpeaker = (name: string) => {
     try {
         const allItems = await dbGetAll();
         for (const item of allItems) await dbDelete(item);
-        
-        await refreshFromDb(); 
-        setSelectedItem(null);
-        await triggerAutoSave([]); 
-
+        await refreshFromDb(); setSelectedItem(null); await triggerAutoSave([]); 
         setIsDeleteAllModalOpen(false);
         setInfoModal({ isOpen: true, title: 'Gotowe', message: 'Wyczyszczono wszystko.' });
     } catch(e) { console.error(e); }
@@ -1014,12 +839,8 @@ const handleAddSpeaker = (name: string) => {
     e.preventDefault(); e.stopPropagation(); 
     const textarea = e.target as HTMLTextAreaElement;
     const selection = window.getSelection()?.toString().trim();
-
     setContextMenu({ 
-        visible: true, 
-        x: e.clientX, 
-        y: e.clientY, 
-        cursorIndex: textarea.selectionStart || 0,
+        visible: true, x: e.clientX, y: e.clientY, cursorIndex: textarea.selectionStart || 0,
         selectedText: selection && selection.length < 50 ? selection : null
     });
   };
@@ -1040,14 +861,11 @@ const handleAddSpeaker = (name: string) => {
     const keys = { assemblyAIKey: apiKey, pantryId: pantryId };
     const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = `lasto_keys_backup.json`;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
+    const link = document.createElement('a'); link.download = `lasto_keys_backup.json`;
+    link.href = url; link.click(); URL.revokeObjectURL(url);
   };
 
-  const importKeys = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const importKeys = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -1074,6 +892,20 @@ const handleAddSpeaker = (name: string) => {
             <h2 onClick={() => { setIsSidebarOpen(false); }} className="text-2xl font-light tracking-tight cursor-pointer">Archiwum</h2>
             <button onClick={() => { setIsSidebarOpen(false); }} className="icon-button"><RuneArrowLeft /></button>
           </div>
+          
+          {/* NOWE MIEJSCE PRZYCISKU AKTUALIZUJ (POD NAGŁÓWKIEM) */}
+          <div className="px-4 mb-2">
+            <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`w-full relative overflow-hidden flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600 active:scale-95'}`}>
+                {isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen && (
+                  <svg className="animate-spin h-4 w-4 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                )}
+                <span className={isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen ? "animate-pulse" : ""}>{pobierzState ? 'Gotowe' : (isProcessing && !status ? 'Pobieranie...' : 'Aktualizuj')}</span>
+            </button>
+          </div>
+
           <div className="archive-list">
             {history.map((item) => (
               <div key={item.id} onClick={() => { setSelectedItem(item); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className={`archive-item cursor-pointer ${selectedItem?.id === item.id ? 'archive-item-active' : ''}`}>
@@ -1083,17 +915,9 @@ const handleAddSpeaker = (name: string) => {
               </div>
             ))}
           </div>
+          
           <div className="sidebar-footer flex gap-2">
-              <button onClick={() => loadFromCloud(false)} disabled={!pantryId || isProcessing} className={`flex-1 relative overflow-hidden flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${pobierzState ? 'border-green-500 text-green-500 bg-green-500/10' : 'border-gray-800 text-gray-500 hover:text-white hover:border-gray-600 active:scale-95'}`}>
-                {isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen && (
-                  <svg className="animate-spin h-4 w-4 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                )}
-                <span className={isProcessing && !status && !isDeleteModalOpen && !isDeleteAllModalOpen ? "animate-pulse" : ""}>{pobierzState ? 'Gotowe' : (isProcessing && !status ? 'Pobieranie...' : 'Aktualizuj')}</span>
-              </button>
-              {history.length > 0 && <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive flex-shrink-0" title="Wyczyść archiwum"><TrashIcon /></button>}
+              {history.length > 0 && <button onClick={() => setIsDeleteAllModalOpen(true)} className="btn-clear-archive w-full flex items-center justify-center gap-2" title="Wyczyść archiwum"><TrashIcon /> Wyczyść wszystko</button>}
           </div>
         </div>
       </div>
@@ -1127,36 +951,6 @@ const handleAddSpeaker = (name: string) => {
                       {isDragging ? 'Upuść tutaj!' : 'Wybierz plik audio'}
                       <input type="file"  className="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.aiff,.aif,.mov,.mp4,.m4v,.wmv,.avi,.webm" onChange={handleFileInput}  />
                     </label>
-
-                   {/* <div className="flex items-center gap-3 w-full opacity-30">
-                       <div className="h-px bg-white flex-1"></div>
-                        <span className="text-xs uppercase tracking-widest font-light">LUB Z LINKU</span>
-                        <div className="h-px bg-white flex-1"></div>
-                    </div>
-
-                    <div className="flex w-full gap-2">
-                        <div className="relative flex-1">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                                <LinkIcon />
-                            </div>
-                            
-                           // <input 
-                              type="text" 
-                               value={importUrl}
-                               onChange={(e) => setImportUrl(e.target.value)}
-                               onKeyDown={(e) => e.key === 'Enter' && processUrl()}
-                               placeholder="Wklej link z YouTube"
-                               className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-gray-500 focus:border-white/30 focus:bg-white/10 transition-all outline-none"
-                            />
-                        </div>
-                        <button 
-                            onClick={processUrl}
-                            disabled={!importUrl}
-                            className="px-6 py-2 bg-white text-black font-bold rounded-xl text-sm hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            Wczytaj
-                        </button>
-                    </div>*/}
 
                   </div>
                 )}
@@ -1357,52 +1151,34 @@ const SpeakerRenameInput = ({
 // --- HELPER: USUWANIE ROZSZERZENIA ---
 const removeExtension = (filename: string) => {
   if (!filename) return "";
-  
-  // Lista rozszerzeń, które faktycznie chcemy usunąć
   const extensions = [
     "mp3", "wav", "m4a", "flac", "ogg", "aac", "wma", "aiff", "aif",
     "mov", "mp4", "m4v", "wmv", "avi", "webm", "3gp", "mkv"
   ];
-  
-  // Tworzymy regex: /\.(mp3|wav|...)$/i
   const regex = new RegExp(`\\.(${extensions.join('|')})$`, 'i');
-  
   return filename.replace(regex, '');
 };
 
 // --- FUNKCJA CZYSZCZĄCA TEKST ---
 const cleanTranscript = (text: string) => {
   if (!text) return "";
-
   let cleaned = text;
-
   const phrasesToRemove = [
     /Twój rozmówca zawiesił połączenie.*?rozmowę\./gi,
     /Prosimy poczekać\./gi,
     /Twój rozmówca zawiesił połączenie\./gi,
     /Wkrótce będziesz mógł kontynuować rozmowę\./gi,
-    /Please wait\. Your call will be continued in a moment\./gi,
+    /Please wait\\. Your call will be continued in a moment\./gi,
     /Please wait\./gi
   ];
-
   phrasesToRemove.forEach((regex) => {
     cleaned = cleaned.replace(regex, "");
   });
-
-  const fillerWords = [
-    "aha", "mhm", "yhm", "yyy", "eee", "umm"
-  ];
-
+  const fillerWords = ["aha", "mhm", "yhm", "yyy", "eee", "umm"];
   if (fillerWords.length > 0) {
     const fillerRegex = new RegExp(`\\b(${fillerWords.join('|')})[.,?!]?\\s*`, 'gi');
     cleaned = cleaned.replace(fillerRegex, "");
   }
-
-  cleaned = cleaned
-    .replace(/\s+/g, " ")          
-    .replace(/\s+([.,?!])/g, "$1") 
-    .replace(/,\s*,/g, ",")       
-    .trim();
-
+  cleaned = cleaned.replace(/\s+/g, " ").replace(/\s+([.,?!])/g, "$1").replace(/,\s*,/g, ",").trim();
   return cleaned;
 };
