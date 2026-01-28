@@ -575,7 +575,7 @@ export default function LastoWeb() {
       }
       const { upload_url } = await uploadRes.json();
       
-      setStatus('Zlecanie transkrypcji...');
+      setStatus('Przetwarzanie');
       const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
         headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
